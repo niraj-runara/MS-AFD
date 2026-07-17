@@ -39,11 +39,18 @@ find_library(NCCL_LIB nccl
         /usr/local/cuda/targets/x86_64-linux/lib)
 
 if(NCCL_INCLUDE_DIR AND NCCL_LIB)
-    message(STATUS "NCCL found (${NCCL_LIB}) — building s1_graph_nccl spike")
+    message(STATUS "NCCL found (${NCCL_LIB}) — building s1_graph_nccl + m2_mini")
+
     add_executable(s1_graph_nccl spikes/s1_graph_nccl.cu)
     target_include_directories(s1_graph_nccl PRIVATE ${NCCL_INCLUDE_DIR})
     target_link_libraries(s1_graph_nccl PRIVATE CUDA::cudart ${NCCL_LIB})
+
+    # M2-mini: one cross-GPU FFN hop (reuses the FFN from src/ffn.cu).
+    add_executable(m2_mini src/m2_mini.cu src/ffn.cu)
+    set_target_properties(m2_mini PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_include_directories(m2_mini PRIVATE src ${NCCL_INCLUDE_DIR})
+    target_link_libraries(m2_mini PRIVATE CUDA::cublas ${NCCL_LIB})
 else()
-    message(WARNING "NCCL not found — skipping s1_graph_nccl (needed for S1/M2). "
+    message(WARNING "NCCL not found — skipping s1_graph_nccl + m2_mini (S1/M2). "
                     "Set NCCL_ROOT if it lives in a nonstandard path.")
 endif()
