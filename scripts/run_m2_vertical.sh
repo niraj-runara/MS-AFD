@@ -26,7 +26,13 @@ unset CUDA_VISIBLE_DEVICES || true      # both GPUs visible; roles pick device
 export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps
 export CUDA_MPS_LOG_DIRECTORY=/tmp/mps_log
 mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
-nvidia-cuda-mps-control -d 2>/dev/null || true
+# Restart MPS so the daemon exposes BOTH GPUs. A daemon left over from a
+# single-GPU run (CUDA_VISIBLE_DEVICES=0) would hide GPU1 from all clients ->
+# cudaErrorInvalidDevice on cudaSetDevice(1). A plain `-d` won't fix a stale one.
+echo quit | nvidia-cuda-mps-control 2>/dev/null || true
+sleep 1
+nvidia-cuda-mps-control -d
+sleep 1
 
 CTRL=/dev/shm/m2v_ctrl
 HDIR=/dev/shm/m2v_handles
