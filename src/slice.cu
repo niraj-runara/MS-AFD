@@ -1,4 +1,4 @@
-// MS-AFD · M0 — Single slice.
+// MS-AFD · M0/M1 — One slice process.
 // One MPS process: static arena -> FFN captured into a CUDA Graph -> persistent
 // loop, timing each iteration.
 //
@@ -8,7 +8,15 @@
 // per-iteration distribution: p50, p99, and the p99/p50 ratio.
 //
 // Sequence: arena -> build FFN -> eager forward -> fp32 correctness gate ->
-// capture into a CUDA Graph -> warm up -> timed persistent loop -> latency.csv.
+// capture into a CUDA Graph -> warm up -> timed persistent loop -> CSV.
+//
+// Usage: slice [iters] [out.csv]
+//   iters     iterations of the timed loop (default 10000)
+//   out.csv   per-iteration timings (default latency.csv). M1 gives each fleet
+//             process its own path so they don't clobber each other.
+// Env: MSAFD_CHECK=0 skips the fp32 correctness gate. M0 already verified
+//   correctness; in an M1 fleet, 48 processes each recomputing the single-
+//   threaded CPU reference at once would thrash the host and skew startup.
 
 #include <algorithm>
 #include <cstdio>
@@ -28,6 +36,9 @@ using namespace msafd;
 
 int main(int argc, char** argv) {
     const int iters = (argc > 1) ? std::atoi(argv[1]) : 10000;
+    const char* csv_path = (argc > 2) ? argv[2] : "latency.csv";
+    const char* check_env = std::getenv("MSAFD_CHECK");
+    const bool do_check = !(check_env && std::atoi(check_env) == 0);
     const int warmup = 200;
 
     // --- device / MPS context ------------------------------------------------
@@ -36,9 +47,9 @@ int main(int argc, char** argv) {
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
     const char* mps_pct = std::getenv("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE");
-    std::printf("MS-AFD M0 slice on %s (%d SMs, sm_%d%d) | MPS thread%% = %s\n",
-                prop.name, prop.multiProcessorCount, prop.major, prop.minor,
-                mps_pct ? mps_pct : "(unset)");
+    std::printf("MS-AFD slice [%s] on %s (%d SMs, sm_%d%d) | MPS thread%% = %s\n",
+                csv_path, prop.name, prop.multiProcessorCount, prop.major,
+                prop.minor, mps_pct ? mps_pct : "(unset)");
 
     // --- Step 2: single static arena -----------------------------------------
     Arena arena;
@@ -78,33 +89,41 @@ int main(int argc, char** argv) {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
-    // --- Step 3: eager forward + fp32 correctness gate -----------------------
+    // --- Step 3: eager forward (also pre-warms cuBLAS before capture) --------
     ffn.forward(d_in, d_out, handle, stream);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    std::vector<__nv_bfloat16> h_out_bf(act_elems);
-    CUDA_CHECK(cudaMemcpy(h_out_bf.data(), d_out, act_bytes, cudaMemcpyDeviceToHost));
-    std::vector<float> h_out(act_elems);
-    for (size_t i = 0; i < act_elems; ++i) h_out[i] = __bfloat162float(h_out_bf[i]);
+    // fp32 correctness gate (skipped in fleet mode via MSAFD_CHECK=0).
+    if (do_check) {
+        std::vector<__nv_bfloat16> h_out_bf(act_elems);
+        CUDA_CHECK(cudaMemcpy(h_out_bf.data(), d_out, act_bytes,
+                              cudaMemcpyDeviceToHost));
+        std::vector<float> h_out(act_elems);
+        for (size_t i = 0; i < act_elems; ++i)
+            h_out[i] = __bfloat162float(h_out_bf[i]);
 
-    std::vector<float> ref(act_elems);
-    ffn.reference(h_in.data(), ref.data());
+        std::vector<float> ref(act_elems);
+        ffn.reference(h_in.data(), ref.data());
 
-    // Relative L2 norm ||device - ref|| / ||ref||. Robust to near-zero outputs
-    // (which a per-element ratio would blow up on with pure bf16 rounding).
-    double num = 0.0, den = 0.0;
-    for (size_t i = 0; i < act_elems; ++i) {
-        double d = (double)h_out[i] - (double)ref[i];
-        num += d * d;
-        den += (double)ref[i] * (double)ref[i];
+        // Relative L2 norm ||device - ref|| / ||ref||. Robust to near-zero
+        // outputs (a per-element ratio would blow up on pure bf16 rounding).
+        double num = 0.0, den = 0.0;
+        for (size_t i = 0; i < act_elems; ++i) {
+            double d = (double)h_out[i] - (double)ref[i];
+            num += d * d;
+            den += (double)ref[i] * (double)ref[i];
+        }
+        double rel_l2 = std::sqrt(num) / (std::sqrt(den) + 1e-12);
+        std::printf("correctness: relative L2 error vs fp32 reference = %.5f\n",
+                    rel_l2);
+        if (rel_l2 > 0.03) {
+            std::fprintf(stderr, "FAIL: correctness gate exceeded (rel L2 > 0.03)\n");
+            return 1;
+        }
+        std::printf("correctness gate PASSED\n");
+    } else {
+        std::printf("correctness gate SKIPPED (MSAFD_CHECK=0)\n");
     }
-    double rel_l2 = std::sqrt(num) / (std::sqrt(den) + 1e-12);
-    std::printf("correctness: relative L2 error vs fp32 reference = %.5f\n", rel_l2);
-    if (rel_l2 > 0.03) {
-        std::fprintf(stderr, "FAIL: correctness gate exceeded (rel L2 > 0.03)\n");
-        return 1;
-    }
-    std::printf("correctness gate PASSED\n");
 
     // --- Step 4: capture the FFN into a CUDA Graph ---------------------------
     cudaGraph_t graph;
@@ -133,19 +152,20 @@ int main(int argc, char** argv) {
     }
 
     // --- Step 6: dump per-iteration timings for bench/latency.py -------------
-    FILE* f = std::fopen("latency.csv", "w");
-    if (!f) { std::perror("fopen latency.csv"); return 1; }
+    FILE* f = std::fopen(csv_path, "w");
+    if (!f) { std::perror(csv_path); return 1; }
     std::fprintf(f, "iter,ms\n");
     for (int i = 0; i < iters; ++i) std::fprintf(f, "%d,%.6f\n", i, ms[i]);
     std::fclose(f);
-    std::printf("wrote latency.csv (%d iterations)\n", iters);
+    std::printf("wrote %s (%d iterations)\n", csv_path, iters);
 
     // Quick inline p50/p99 so the slice is useful without the Python step.
     std::vector<float> sorted(ms);
     std::sort(sorted.begin(), sorted.end());
     auto pct = [&](double p) { return sorted[(size_t)(p * (iters - 1))]; };
     const float p50 = pct(0.50), p99 = pct(0.99);
-    std::printf("p50=%.4f ms  p99=%.4f ms  p99/p50=%.3f\n", p50, p99, p99 / p50);
+    std::printf("[%s] p50=%.4f ms  p99=%.4f ms  p99/p50=%.3f\n", csv_path, p50,
+                p99, p99 / p50);
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
