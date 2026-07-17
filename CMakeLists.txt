@@ -19,6 +19,13 @@ set_target_properties(slice PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 find_package(CUDAToolkit REQUIRED)
 target_link_libraries(slice PRIVATE CUDA::cublas)
 
+# Spike S1.5: intra-GPU IPC fan-out (hub + MPS expert processes). Needs cuBLAS +
+# the FFN, but NOT NCCL — builds regardless of NCCL availability.
+add_executable(s15_ipc_fanout spikes/s15_ipc_fanout.cu src/ffn.cu)
+set_target_properties(s15_ipc_fanout PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(s15_ipc_fanout PRIVATE src)
+target_link_libraries(s15_ipc_fanout PRIVATE CUDA::cublas)
+
 # --- NCCL (for Spike S1 / M2 fabric) -------------------------------------
 # Optional: the s1 spike only builds if NCCL is found, so the M0/M1 `slice`
 # target still builds on a box without NCCL.

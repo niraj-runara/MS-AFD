@@ -45,7 +45,7 @@ def main() -> None:
     print(f"p90       : {p90:.4f} ms")
     print(f"p99       : {p99:.4f} ms")
     print(f"p99.9     : {p999:.4f} ms")
-    print(f"p99/p50   : {p99 / p50:.4f}   <-- M0 determinism metric")
+    print(f"p99/p50   : {p99 / p50:.4f}   <-- determinism metric")
 
 
 if __name__ == "__main__":
