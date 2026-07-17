@@ -1,0 +1,62 @@
+An instance of this daemon is already running
+########## M1 sweep: partitioned (100/N% each) ##########
+[run_slices] N=1 pct=100 iters=2000 tokens=256 arena=512MB -> results/m1/partitioned_N1
+[run_slices] N=1 done, failures=0
+
+=== M1 partitioned  N=1  pct_each=100%  (1 slices) ===
+  per-slice p50   : min 0.572  median 0.572  max 0.572 ms
+  per-slice p99   : min 0.673  median 0.673  max 0.673 ms
+  per-slice p99/p50: min 1.1770  median 1.1770  WORST 1.1770
+[run_slices] N=8 pct=12 iters=2000 tokens=256 arena=512MB -> results/m1/partitioned_N8
+[run_slices] N=8 done, failures=0
+
+=== M1 partitioned  N=8  pct_each=12%  (8 slices) ===
+  per-slice p50   : min 5.009  median 5.012  max 5.019 ms
+  per-slice p99   : min 5.488  median 5.493  max 5.495 ms
+  per-slice p99/p50: min 1.0948  median 1.0961  WORST 1.0967
+[run_slices] N=16 pct=6 iters=2000 tokens=256 arena=512MB -> results/m1/partitioned_N16
+[run_slices] N=16 done, failures=0
+
+=== M1 partitioned  N=16  pct_each=6%  (16 slices) ===
+  per-slice p50   : min 10.782  median 10.787  max 10.792 ms
+  per-slice p99   : min 11.286  median 11.314  max 11.335 ms
+  per-slice p99/p50: min 1.0461  median 1.0488  WORST 1.0503
+[run_slices] N=32 pct=3 iters=2000 tokens=256 arena=512MB -> results/m1/partitioned_N32
+[run_slices] N=32 done, failures=0
+
+=== M1 partitioned  N=32  pct_each=3%  (32 slices) ===
+  per-slice p50   : min 27.166  median 27.186  max 27.214 ms
+  per-slice p99   : min 28.115  median 28.159  max 28.210 ms
+  per-slice p99/p50: min 1.0342  median 1.0359  WORST 1.0376
+[run_slices] N=48 pct=2 iters=2000 tokens=256 arena=512MB -> results/m1/partitioned_N48
+[run_slices] N=48 done, failures=0
+
+=== M1 partitioned  N=48  pct_each=2%  (48 slices) ===
+  per-slice p50   : min 38.392  median 38.454  max 38.548 ms
+  per-slice p99   : min 38.780  median 38.829  max 38.911 ms
+  per-slice p99/p50: min 1.0090  median 1.0097  WORST 1.0106
+########## M1 sweep: fixed 10% each (oversubscribed) ##########
+[run_slices] N=8 pct=10 iters=2000 tokens=256 arena=512MB -> results/m1/fixed10_N8
+[run_slices] N=8 done, failures=0
+
+=== M1 fixed10  N=8  pct_each=10%  (8 slices) ===
+  per-slice p50   : min 5.694  median 5.696  max 5.697 ms
+  per-slice p99   : min 5.861  median 5.863  max 5.877 ms
+  per-slice p99/p50: min 1.0290  median 1.0294  WORST 1.0316
+[run_slices] N=16 pct=10 iters=2000 tokens=256 arena=512MB -> results/m1/fixed10_N16
+[run_slices] N=16 done, failures=0
+
+=== M1 fixed10  N=16  pct_each=10%  (16 slices) ===
+  per-slice p50   : min 11.186  median 11.197  max 11.201 ms
+  per-slice p99   : min 11.879  median 11.931  max 11.995 ms
+  per-slice p99/p50: min 1.0608  median 1.0657  WORST 1.0711
+[run_slices] N=48 pct=10 iters=2000 tokens=256 arena=512MB -> results/m1/fixed10_N48
+[run_slices] N=48 done, failures=0
+
+=== M1 fixed10  N=48  pct_each=10%  (48 slices) ===
+  per-slice p50   : min 27.124  median 27.312  max 27.481 ms
+  per-slice p99   : min 33.399  median 33.823  max 34.139 ms
+  per-slice p99/p50: min 1.2245  median 1.2373  WORST 1.2517
+
+########## M1 summary (results/m1/summary.csv) ##########
+scripts/m1_sweep.sh: line 41: column: command not found

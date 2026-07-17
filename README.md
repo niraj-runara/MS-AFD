@@ -20,7 +20,7 @@ Target GPU: **A100 (Ampere, sm_80)**. Model: **Llama-3 8B dense FFN** — SwiGLU
 | Milestone | Scope | Status |
 |-----------|-------|--------|
 | **M0** | One slice: MPS + arena + CUDA Graph + persistent loop, measured | ✅ complete (p99/p50=1.001) |
-| M1 | Many slices on one GPU (8→16→48); determinism vs slice count | ⬜ later |
+| **M1** | Many slices on one GPU (8→16→48); determinism vs slice count | ✅ complete (p99/p50=1.011 @48) |
 | M2 | All 4 F-side GPUs; NCCL M2N routing | ⬜ later |
 | M3 | Real A-side + real MoE model, end to end | ⬜ later |
 

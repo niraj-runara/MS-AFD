@@ -5,21 +5,56 @@
 // Run under MPS (see scripts/start_mps.sh); CUDA_MPS_ACTIVE_THREAD_PERCENTAGE
 // caps this process to a fraction of the GPU's SMs (Step 1 — external).
 //
-// Usage: ./slice [iters] [tokens]
-//   iters  = timed graph launches (default 5000)
-//   tokens = token batch per iteration (default 256)
+// Usage: ./slice [iters] [tokens] [out.csv]
+//   iters   = timed graph launches (default 5000)
+//   tokens  = token batch per iteration (default 256)
+//   out.csv = per-iteration timing output path (default latency.csv)
+// Env: MSAFD_ARENA_MB overrides the arena size in MiB (default 1024). Used in M1
+//      to pack many slices into one GPU's HBM.
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <dirent.h>
+#include <unistd.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include "arena.h"
 #include "ffn.h"
 
 using namespace msafd;
+
+// Cross-process barrier for M1: every slice drops a ready-file, then spins until
+// it sees all N of them, so all slices enter the timed loop simultaneously
+// (otherwise staggered CPU-reference phases would skew the contention measured).
+// No-op unless MSAFD_BARRIER_DIR is set. MSAFD_BARRIER_N = expected slice count.
+static void barrier_wait() {
+    const char* dir = std::getenv("MSAFD_BARRIER_DIR");
+    if (!dir) return;
+    int need = std::getenv("MSAFD_BARRIER_N")
+                   ? std::atoi(std::getenv("MSAFD_BARRIER_N"))
+                   : 1;
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/ready_%d", dir, (int)getpid());
+    if (FILE* rf = std::fopen(path, "w")) {
+        std::fputc('1', rf);
+        std::fclose(rf);
+    }
+    for (int spins = 0; spins < 60000; ++spins) {  // ~120 s timeout
+        int count = 0;
+        if (DIR* d = opendir(dir)) {
+            for (dirent* e; (e = readdir(d));)
+                if (std::strncmp(e->d_name, "ready_", 6) == 0) ++count;
+            closedir(d);
+        }
+        if (count >= need) return;
+        usleep(2000);
+    }
+    fprintf(stderr, "[barrier] timeout waiting for %d slices\n", need);
+}
 
 // CPU reference for one output row (token t0): full SwiGLU FFN in fp32, reading
 // the host mirror of the weights. Fills ref[0..d_model).
@@ -50,12 +85,16 @@ static void cpu_reference_row(const FfnConfig& cfg, const std::vector<__half>& i
 }
 
 int main(int argc, char** argv) {
-    const int iters  = argc > 1 ? std::atoi(argv[1]) : 5000;
-    const int tokens = argc > 2 ? std::atoi(argv[2]) : 256;
-    const int warmup = 200;
+    const int   iters   = argc > 1 ? std::atoi(argv[1]) : 5000;
+    const int   tokens  = argc > 2 ? std::atoi(argv[2]) : 256;
+    const char* out_csv = argc > 3 ? argv[3] : "latency.csv";
+    const int   warmup  = 200;
 
-    // --- Step 2: static 1 GB arena -------------------------------------------
-    Arena arena(kArenaBytes);
+    // --- Step 2: static arena (1 GB default; MSAFD_ARENA_MB to pack slices) ---
+    std::size_t arena_bytes = kArenaBytes;
+    if (const char* mb = std::getenv("MSAFD_ARENA_MB"))
+        arena_bytes = (std::size_t)std::atoll(mb) << 20;
+    Arena arena(arena_bytes);
 
     FfnConfig cfg;
     cfg.tokens = tokens;
@@ -151,6 +190,10 @@ int main(int argc, char** argv) {
     }
     MSAFD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
+    // M1: wait until all concurrent slices are warmed up, so the timed loops
+    // overlap and we measure real steady-state contention (no-op in M0).
+    barrier_wait();
+
     std::vector<float> ms(iters);
     for (int i = 0; i < iters; ++i) {
         MSAFD_CUDA_CHECK(cudaEventRecord(start, stream));
@@ -160,9 +203,9 @@ int main(int argc, char** argv) {
         MSAFD_CUDA_CHECK(cudaEventElapsedTime(&ms[i], start, stop));
     }
 
-    FILE* f = std::fopen("latency.csv", "w");
+    FILE* f = std::fopen(out_csv, "w");
     if (!f) {
-        perror("[slice] fopen latency.csv");
+        perror("[slice] fopen out_csv");
         return 1;
     }
     std::fprintf(f, "iter,ms\n");
@@ -182,7 +225,7 @@ int main(int argc, char** argv) {
     double p50 = pct(50), p99 = pct(99);
     printf("[loop] %d iters | p50=%.4f ms p99=%.4f ms p99/p50=%.3f\n", iters,
            p50, p99, p99 / p50);
-    printf("[slice] wrote latency.csv — run: python bench/latency.py\n");
+    printf("[slice] wrote %s\n", out_csv);
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
