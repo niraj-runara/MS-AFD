@@ -1,3 +1,0 @@
-[hub r1] GPU1: 8 experts; waiting...
-[hub r1] all experts ready; serving 5000000 beats
-[hub r1 beat] wrote results/m2_full/hub_r1.csv | p50=0.7000 ms  p99=0.7523 ms  p99.9=1.0423 ms  p99/p50=1.075

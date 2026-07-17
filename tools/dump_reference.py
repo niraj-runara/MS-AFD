@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""M3-mini · reference dumper — the HF oracle.
+
+Runs the real Qwen3-30B-A3B on a prompt, and for ONE MoE layer dumps everything
+the C++ fabric needs to reproduce that layer and be checked for correctness:
+
+  meta.json              dims + counts (d_model, d_ff, num_experts, top_k, tokens)
+  hidden_in.bin          [T, d_model] bf16   — MoE-block input activations
+  topk_idx.bin           [T, top_k] int32    — expert id per token (router top-k)
+  topk_w.bin             [T, top_k] float32  — combine weight per (token, expert)
+  moe_out.bin            [T, d_model] bf16    — reference MoE-block output
+  experts/e{E}_gate.bin  [d_model, d_ff] bf16
+  experts/e{E}_up.bin    [d_model, d_ff] bf16
+  experts/e{E}_down.bin  [d_ff, d_model] bf16
+
+The C++ side loads the expert weights + hidden_in + routing, runs each expert on
+its assigned (capacity-padded) tokens through the fabric, combines per-token with
+topk_w, and compares against moe_out.
+
+NOTE: routing is recomputed here exactly as Qwen3 does it (softmax -> top-k ->
+optional renorm). It must match the model's config.norm_topk_prob. Verify the
+first run's correctness gate before trusting the numbers.
+
+Usage:
+  python tools/dump_reference.py --model Qwen/Qwen3-30B-A3B --layer 0 \
+      --prompt "The capital of France is" --out results/m3_ref
+"""
+
+import argparse
+import json
+import os
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+def dump_bf16(t: torch.Tensor, path: str) -> None:
+    # bf16 is 2 bytes; view as uint16 to get raw bytes numpy can write.
+    a = t.detach().to(torch.bfloat16).contiguous().view(torch.uint16).cpu().numpy()
+    a.tofile(path)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default="Qwen/Qwen3-30B-A3B")
+    ap.add_argument("--layer", type=int, default=0, help="which decoder layer's MoE block")
+    ap.add_argument("--prompt", default="The capital of France is")
+    ap.add_argument("--out", default="results/m3_ref")
+    args = ap.parse_args()
+
+    os.makedirs(os.path.join(args.out, "experts"), exist_ok=True)
+
+    tok = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model, torch_dtype=torch.bfloat16, device_map="cuda"
+    )
+    model.eval()
+    cfg = model.config
+
+    block = model.model.layers[args.layer].mlp   # Qwen3MoeSparseMoeBlock
+    d_model = cfg.hidden_size
+    d_ff = cfg.moe_intermediate_size
+    n_exp = cfg.num_experts
+    top_k = cfg.num_experts_per_tok
+    norm = bool(getattr(cfg, "norm_topk_prob", True))
+
+    captured = {}
+
+    def hook(_module, inputs, output):
+        # input hidden states to the MoE block: [batch, seq, d_model]
+        captured["hidden_in"] = inputs[0].detach()
+        # output can be a tensor or (tensor, router_logits) depending on version
+        captured["moe_out"] = output[0].detach() if isinstance(output, tuple) else output.detach()
+
+    h = block.register_forward_hook(hook)
+    ids = tok(args.prompt, return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        model(**ids)
+    h.remove()
+
+    hidden = captured["hidden_in"].reshape(-1, d_model)          # [T, d_model]
+    moe_out = captured["moe_out"].reshape(-1, d_model)           # [T, d_model]
+    T = hidden.shape[0]
+
+    # Recompute the router exactly as Qwen3 does.
+    with torch.no_grad():
+        logits = block.gate(hidden.to(block.gate.weight.dtype))  # [T, n_exp]
+        probs = torch.softmax(logits.float(), dim=-1)
+        topk_w, topk_idx = torch.topk(probs, top_k, dim=-1)      # [T, top_k]
+        if norm:
+            topk_w = topk_w / topk_w.sum(dim=-1, keepdim=True)
+
+    # Dump activations + routing.
+    dump_bf16(hidden, os.path.join(args.out, "hidden_in.bin"))
+    dump_bf16(moe_out, os.path.join(args.out, "moe_out.bin"))
+    topk_idx.to(torch.int32).cpu().numpy().tofile(os.path.join(args.out, "topk_idx.bin"))
+    topk_w.to(torch.float32).cpu().numpy().tofile(os.path.join(args.out, "topk_w.bin"))
+
+    # Dump each expert's three weight matrices (row-major, matching ffn.cu).
+    for e in range(n_exp):
+        ex = block.experts[e]
+        dump_bf16(ex.gate_proj.weight.t(), os.path.join(args.out, f"experts/e{e}_gate.bin"))
+        dump_bf16(ex.up_proj.weight.t(),   os.path.join(args.out, f"experts/e{e}_up.bin"))
+        dump_bf16(ex.down_proj.weight.t(), os.path.join(args.out, f"experts/e{e}_down.bin"))
+
+    meta = {
+        "model": args.model, "layer": args.layer, "prompt": args.prompt,
+        "tokens": int(T), "d_model": int(d_model), "d_intermediate": int(d_ff),
+        "num_experts": int(n_exp), "top_k": int(top_k), "norm_topk_prob": norm,
+        "dtype": "bf16",
+    }
+    with open(os.path.join(args.out, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    # Per-expert token load (the dynamic, uneven distribution the fabric must handle).
+    counts = torch.bincount(topk_idx.reshape(-1), minlength=n_exp)
+    print(f"dumped layer {args.layer}: T={T} tokens, {n_exp} experts, top_k={top_k}")
+    print(f"per-expert load: min={counts.min().item()} max={counts.max().item()} "
+          f"mean={counts.float().mean().item():.1f}  -> capacity C must be >= max")
+    print(f"wrote {args.out}/  (meta.json, hidden_in, topk_*, moe_out, experts/)")
+
+
+if __name__ == "__main__":
+    main()
