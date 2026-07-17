@@ -1,0 +1,4 @@
+[hub] 32 experts, tile=256x2048; IPC handles published; waiting...
+[hub] all experts ready; running 10000 beats
+[hub] output non-zero: 16777216/16777216 elements
+[hub] wrote results/s15/beat.csv | fan-out beat p50=1.4144 ms  p99=1.5046 ms  p99/p50=1.064
