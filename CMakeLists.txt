@@ -57,6 +57,12 @@ if(NCCL_INCLUDE_DIR AND NCCL_LIB)
     set_target_properties(m2_mini PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_include_directories(m2_mini PRIVATE src ${NCCL_INCLUDE_DIR})
     target_link_libraries(m2_mini PRIVATE CUDA::cublas ${NCCL_LIB})
+
+    # M2-vertical: full F-side dataflow (NCCL hub + IPC fan-out to MPS experts).
+    add_executable(m2_vertical src/m2_vertical.cu src/ffn.cu)
+    set_target_properties(m2_vertical PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_include_directories(m2_vertical PRIVATE src ${NCCL_INCLUDE_DIR})
+    target_link_libraries(m2_vertical PRIVATE CUDA::cublas ${NCCL_LIB})
 else()
     message(WARNING "NCCL not found — skipping s1_graph_nccl + m2_mini (S1/M2). "
                     "Set NCCL_ROOT if it lives in a nonstandard path.")
