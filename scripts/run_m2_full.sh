@@ -25,21 +25,26 @@ if (( H < 1 )); then echo "need >=2 GPUs (found ${NGPU})" >&2; exit 1; fi
 if (( H + 1 > NGPU )); then echo "H=${H} needs $((H+1)) GPUs, found ${NGPU}" >&2; exit 1; fi
 
 unset CUDA_VISIBLE_DEVICES || true      # all GPUs visible; each role sets device
-export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps
-export CUDA_MPS_LOG_DIRECTORY=/tmp/mps_log
-mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
-# Restart MPS so the daemon exposes ALL GPUs (stale single-GPU daemon would hide
-# the F-side GPUs from clients -> cudaErrorInvalidDevice).
-echo quit | nvidia-cuda-mps-control 2>/dev/null || true
-sleep 1
-nvidia-cuda-mps-control -d
-sleep 2
-# Pre-spawn the MPS server so the ~1+H*(1+nexp) clients don't race to start it
-# on first connect (that race -> cudaErrorMpsConnectionFailed on a fresh daemon).
-echo "start_server -uid $(id -u)" | nvidia-cuda-mps-control 2>/dev/null || true
-sleep 2
-# sanity: report what the control daemon sees
-nvidia-cuda-mps-control <<<get_server_list 2>/dev/null || true
+
+# MPS is optional. Some container hosts can't run the MPS server (it crashes on
+# start). MPS per-expert isolation is already proven (M1/S1.5/M2-vertical); this
+# run proves the 4-GPU M2N routing at scale, which doesn't require MPS. Set
+# NOMPS=1 to skip MPS (experts share each F-side GPU via default time-slicing,
+# uncapped). Leaving CUDA_MPS_PIPE_DIRECTORY unset means clients never try MPS.
+if [[ -z "${NOMPS:-}" ]]; then
+    export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps
+    export CUDA_MPS_LOG_DIRECTORY=/tmp/mps_log
+    mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+    echo quit | nvidia-cuda-mps-control 2>/dev/null || true
+    sleep 1
+    nvidia-cuda-mps-control -d
+    sleep 2
+    echo "start_server -uid $(id -u)" | nvidia-cuda-mps-control 2>/dev/null || true
+    sleep 2
+    echo "MPS mode (experts SM-capped at ${PCT}%)"
+else
+    echo "NO-MPS mode (experts uncapped, default time-slicing; MPS isolation proven separately)"
+fi
 
 IDFILE=/dev/shm/m2f_nccl_id
 rm -f "$IDFILE" "$IDFILE.tmp"
@@ -60,9 +65,14 @@ for (( g=1; g<=H; g++ )); do
     "$BIN" hub "$g" "$H" "$NEXP" "$IDFILE" "$CTRL" "$HDIR" "$BEATS" \
         "results/m2_full/hub_r${g}.csv" > "results/m2_full/hub_r${g}.log" 2>&1 & pids+=($!)
     for (( e=0; e<NEXP; e++ )); do
-        CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$PCT" \
+        if [[ -z "${NOMPS:-}" ]]; then
+            CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$PCT" \
+                "$BIN" expert "$e" "$NEXP" "$CTRL" "$HDIR" "$g" \
+                > "results/m2_full/g${g}_expert_${e}.log" 2>&1 &
+        else
             "$BIN" expert "$e" "$NEXP" "$CTRL" "$HDIR" "$g" \
-            > "results/m2_full/g${g}_expert_${e}.log" 2>&1 &
+                > "results/m2_full/g${g}_expert_${e}.log" 2>&1 &
+        fi
     done
 done
 
