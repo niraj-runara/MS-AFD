@@ -87,11 +87,26 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --- NCCL comm: both ranks on the SAME device 0 (under MPS) --------------
-    CUDA_CHECK(cudaSetDevice(0));
+    // --- pick this rank's device --------------------------------------------
+    // NCCL rejects two ranks sharing one physical GPU ("Duplicate GPU detected",
+    // ncclInvalidUsage) even under MPS. So when >1 GPU is visible we bind rank r
+    // to device r (1 rank/GPU) — which is also how M2 routes (cross-GPU). With a
+    // single GPU both ranks land on device 0 and NCCL will (expectedly) refuse.
+    // Optional 3rd arg overrides the device explicitly.
+    int ndev = 0;
+    CUDA_CHECK(cudaGetDeviceCount(&ndev));
+    const int dev = (argc > 3) ? std::atoi(argv[3]) : (ndev >= nranks ? rank : 0);
+    CUDA_CHECK(cudaSetDevice(dev));
+    std::printf("[rank %d] using device %d of %d visible\n", rank, dev, ndev);
+    if (ndev < nranks)
+        std::fprintf(stderr,
+                     "[rank %d] WARNING: only %d GPU(s) visible; 2 ranks on one "
+                     "GPU — NCCL will likely reject this. Use a >=2-GPU box.\n",
+                     rank, ndev);
+
     ncclComm_t comm;
     NCCL_CHECK(ncclCommInitRank(&comm, nranks, id, rank));
-    std::printf("[rank %d] comm initialized (2 ranks, device 0)\n", rank);
+    std::printf("[rank %d] comm initialized (2 ranks, device %d)\n", rank, dev);
 
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
