@@ -1,6 +1,0 @@
-MS-AFD slice [results/fleet_N16_pct6/slice_14.csv] on NVIDIA A100-SXM4-80GB (6 SMs, sm_80) | MPS thread% = 6
-arena: 16908288 / 67108864 bytes used (16.1 MB)
-correctness gate SKIPPED (MSAFD_CHECK=0)
-CUDA Graph captured + instantiated
-wrote results/fleet_N16_pct6/slice_14.csv (10000 iterations)
-[results/fleet_N16_pct6/slice_14.csv] p50=0.3031 ms  p99=0.3267 ms  p99/p50=1.078
