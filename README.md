@@ -2,7 +2,8 @@
 
 A software-defined systolic FFN fabric on commodity GPUs: partition GPUs into many
 statically-scheduled micro-units that execute FFN layers in a deterministic, systolic
-rhythm. See `docs/implementation-plan.docx` for the full plan.
+rhythm. See `docs/implementation-plan.docx` for the full plan and
+[`docs/findings.md`](docs/findings.md) for what M0 + M1 proved (plain-language).
 
 **M0 — single slice — ✅ complete.**
 One MPS slice, one static arena, one FFN GEMM captured in a CUDA Graph, running
@@ -60,6 +61,20 @@ than the single slice) and fairness is near-perfect (every slice within 0.4% of
 the others). No contention cliff, no starvation — 48 deterministic FFN
 micro-units co-reside on one A100. p50 scales with the inverse SM share (we don't
 care — the ratio is the metric).
+
+**Overcommit stress test.** Same 48 slices but at 10% SM share each = **480%
+total demand** (~5× oversubscribed), vs the 96% clean partition above:
+
+| 48-slice config | total demand | median p50 (ms) | worst p99/p50 | p50 spread |
+|-----------------|--------------|-----------------|---------------|------------|
+| 2% each (partition)  | 96%  | 1.332 | 1.070 | 1.004 |
+| 10% each (overcommit) | 480% | 0.901 | 1.104 | 1.006 |
+
+Even at ~5× oversubscription, determinism holds (worst p99/p50 1.10, still ~1.1)
+and fairness is intact (spread 1.006) — the fabric degrades **gracefully** under
+contention, not catastrophically. p50 is *lower* under overcommit because each
+slice is allowed ~10 SMs (vs ~2 in the partition); the tiny FFN doesn't saturate
+them, so MPS time-multiplexes the excess demand without adding jitter.
 
 ## Layout
 
