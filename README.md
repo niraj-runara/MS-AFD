@@ -5,8 +5,9 @@ statically-scheduled micro-units that execute FFN layers in a deterministic, sys
 rhythm. See `docs/implementation-plan.docx` for the full plan.
 
 **Current milestone: M0 — single slice.**
-Prove one MPS slice, one 1 GB static arena, one FFN GEMM captured in a CUDA Graph,
+Prove one MPS slice, one static arena, one FFN GEMM captured in a CUDA Graph,
 running in a persistent loop from HBM with stable (low p99/p50) latency.
+The FFN unit = one Qwen3-30B-A3B expert (hidden 2048, ffn 768, bf16, SwiGLU).
 
 > Status: scaffolding only. Source files are skeletons/boilerplate — no implementation yet.
 
@@ -48,6 +49,6 @@ python bench/latency.py       # summarize latency distribution
 
 ## Requirements
 
-- NVIDIA GPU (Hopper / Blackwell), CUDA Toolkit 12.x, cuBLAS
+- NVIDIA GPU (A100 80GB, `sm_80`; Hopper/Blackwell also fine), CUDA Toolkit 12.x, cuBLAS
 - NCCL (needed from M2; spike S1 tests it earlier)
 - Nsight Systems (profiling from day one)
