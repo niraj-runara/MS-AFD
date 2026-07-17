@@ -33,7 +33,13 @@ mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
 echo quit | nvidia-cuda-mps-control 2>/dev/null || true
 sleep 1
 nvidia-cuda-mps-control -d
-sleep 1
+sleep 2
+# Pre-spawn the MPS server so the ~1+H*(1+nexp) clients don't race to start it
+# on first connect (that race -> cudaErrorMpsConnectionFailed on a fresh daemon).
+echo "start_server -uid $(id -u)" | nvidia-cuda-mps-control 2>/dev/null || true
+sleep 2
+# sanity: report what the control daemon sees
+nvidia-cuda-mps-control <<<get_server_list 2>/dev/null || true
 
 IDFILE=/dev/shm/m2f_nccl_id
 rm -f "$IDFILE" "$IDFILE.tmp"
