@@ -43,6 +43,13 @@ if [[ -z "${NOMPS:-}" ]]; then
     sleep 2
     echo "MPS mode (experts SM-capped at ${PCT}%)"
 else
+    # Clear any inherited MPS env (e.g. a manual `export CUDA_MPS_PIPE_DIRECTORY`
+    # in the shell) so clients do NOT try to connect to MPS, and stop any stale
+    # control daemon left running.
+    echo quit | nvidia-cuda-mps-control 2>/dev/null || true
+    unset CUDA_MPS_PIPE_DIRECTORY || true
+    unset CUDA_MPS_LOG_DIRECTORY || true
+    unset CUDA_MPS_ACTIVE_THREAD_PERCENTAGE || true
     echo "NO-MPS mode (experts uncapped, default time-slicing; MPS isolation proven separately)"
 fi
 
