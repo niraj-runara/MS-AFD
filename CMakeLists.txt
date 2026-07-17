@@ -63,6 +63,12 @@ if(NCCL_INCLUDE_DIR AND NCCL_LIB)
     set_target_properties(m2_vertical PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_include_directories(m2_vertical PRIVATE src ${NCCL_INCLUDE_DIR})
     target_link_libraries(m2_vertical PRIVATE CUDA::cublas ${NCCL_LIB})
+
+    # M2-full: the fabric — A-side router scatters to H F-side GPUs (M2N).
+    add_executable(m2_full src/m2_full.cu src/ffn.cu)
+    set_target_properties(m2_full PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_include_directories(m2_full PRIVATE src ${NCCL_INCLUDE_DIR})
+    target_link_libraries(m2_full PRIVATE CUDA::cublas ${NCCL_LIB})
 else()
     message(WARNING "NCCL not found — skipping s1_graph_nccl + m2_mini (S1/M2). "
                     "Set NCCL_ROOT if it lives in a nonstandard path.")
