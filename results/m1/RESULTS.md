@@ -7,6 +7,13 @@
 file barrier after warmup so their timed loops overlap and measure real steady-state
 contention. Raw per-iteration CSVs live on the box under `results/m1/<run>/`.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="m1_determinism_dark.png">
+  <img alt="Left: per-slice p99/p50 vs slice count — partitioned slices trend down to 1.011 at N=48 while oversubscribed (fixed 10% each) trend up to 1.252. Right: per-slice p50 latency vs N for both modes." src="m1_determinism.png">
+</picture>
+
+*Regenerate with `python bench/plot_m1.py results/m1/summary.csv results/m1`.*
+
 ## Sweep A — partitioned (each slice = 100/N% of SMs, Σ ≤ 100%)
 
 | N slices | %/slice | p50 (median) | p99 (worst) | **p99/p50 (worst)** |
