@@ -31,6 +31,7 @@
 #include <thread>
 #include <vector>
 #include <fcntl.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -53,6 +54,14 @@ struct Control {
     volatile int done[kMaxExp];    // expert e sets = epoch when its beat is done
     int nexp;
 };
+
+// Make cudaStreamSynchronize block (yield the CPU) instead of busy-polling, so
+// N expert processes don't thrash the scheduler. Must run before the context
+// exists; tolerate the "already active" error.
+static void set_blocking_sync() {
+    cudaError_t e = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+    if (e != cudaSuccess && e != cudaErrorSetOnActiveProcess) CUDA_CHECK(e);
+}
 
 static Control* map_control(const char* path, bool create, int nexp) {
     int flags = create ? (O_CREAT | O_RDWR | O_TRUNC) : O_RDWR;
@@ -95,6 +104,7 @@ static bool read_exact(const std::string& path, void* data, size_t n) {
 static int run_hub(int nexp, const char* ctrl, const char* hdir, int beats,
                    const char* csv) {
     CUDA_CHECK(cudaSetDevice(0));
+    set_blocking_sync();
     FfnConfig cfg;
     const int T = cfg.tokens, D = cfg.d_model;
     const size_t slice = (size_t)T * D;
@@ -137,6 +147,7 @@ static int run_hub(int nexp, const char* ctrl, const char* hdir, int beats,
             int dn = 0;
             for (int e = 0; e < nexp; ++e) dn += (c->done[e] == ep);
             if (dn == nexp) break;
+            sched_yield();  // don't hard-spin against the expert processes
         }
     };
     for (int w = 1; w <= 50; ++w) beat(w);  // warmup
@@ -174,6 +185,7 @@ static int run_hub(int nexp, const char* ctrl, const char* hdir, int beats,
 // ----------------------------------------------------------------- expert -----
 static int run_expert(int id, int nexp, const char* ctrl, const char* hdir) {
     CUDA_CHECK(cudaSetDevice(0));
+    set_blocking_sync();
     const char* pct = std::getenv("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE");
 
     cudaIpcMemHandle_t hin, hout;
@@ -219,7 +231,7 @@ static int run_expert(int id, int nexp, const char* ctrl, const char* hdir) {
 
     int last = 0;
     for (;;) {
-        while (c->epoch == last && !c->stop) { /* busy-wait for next beat */ }
+        while (c->epoch == last && !c->stop) sched_yield();  // yield between beats
         if (c->stop) break;
         last = c->epoch;
         CUDA_CHECK(cudaGraphLaunch(exec, stream));
