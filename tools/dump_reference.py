@@ -139,6 +139,16 @@ def main() -> None:
     with open(os.path.join(args.out, "meta.txt"), "w") as f:
         f.write(f"{T} {d_model} {d_ff} {n_exp} {top_k}\n")
 
+    # For the fabric run (m3_fabric): the active experts (>=1 token) — one per
+    # spawned process — and the capacity C (max per-expert load).
+    counts_all = torch.bincount(topk_idx.reshape(-1), minlength=n_exp)
+    active = [e for e in range(n_exp) if counts_all[e].item() > 0]
+    cap = int(counts_all.max().item())
+    with open(os.path.join(args.out, "active_experts.txt"), "w") as f:
+        f.write("\n".join(str(e) for e in active) + "\n")
+    with open(os.path.join(args.out, "capacity.txt"), "w") as f:
+        f.write(f"{cap}\n")
+
     # Per-expert token load (the dynamic, uneven distribution the fabric must handle).
     counts = torch.bincount(topk_idx.reshape(-1), minlength=n_exp)
     print(f"dumped layer {args.layer}: T={T} tokens, {n_exp} experts, top_k={top_k}")

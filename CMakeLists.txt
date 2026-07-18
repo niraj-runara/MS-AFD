@@ -33,6 +33,13 @@ set_target_properties(m3_layer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(m3_layer PRIVATE src)
 target_link_libraries(m3_layer PRIVATE CUDA::cublas)
 
+# M3-mini through the fabric: hub + MPS expert processes (CUDA IPC), single GPU.
+# Correctness of the real layer through the real fan-out. cuBLAS + FFN, no NCCL.
+add_executable(m3_fabric src/m3_fabric.cu src/ffn.cu)
+set_target_properties(m3_fabric PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(m3_fabric PRIVATE src)
+target_link_libraries(m3_fabric PRIVATE CUDA::cublas)
+
 # --- NCCL (for Spike S1 / M2 fabric) -------------------------------------
 # Optional: the s1 spike only builds if NCCL is found, so the M0/M1 `slice`
 # target still builds on a box without NCCL.
