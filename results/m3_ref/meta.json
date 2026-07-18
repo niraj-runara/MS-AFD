@@ -1,0 +1,12 @@
+{
+  "model": "Qwen/Qwen3-30B-A3B",
+  "layer": 0,
+  "prompt": "The capital of France is",
+  "tokens": 5,
+  "d_model": 2048,
+  "d_intermediate": 768,
+  "num_experts": 128,
+  "top_k": 8,
+  "norm_topk_prob": true,
+  "dtype": "bf16"
+}

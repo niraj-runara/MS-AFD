@@ -1,0 +1,4 @@
+[hub] 33 active experts, C=2, tile=2x2048; waiting...
+[hub] all experts ready; running 2000 beats
+[hub] fan-out beat p50=0.6513 ms  p99=0.7059 ms  p99/p50=1.084
+[hub] rel-L2 vs HF moe_out = 0.00225  ->  CORRECT through the fabric
