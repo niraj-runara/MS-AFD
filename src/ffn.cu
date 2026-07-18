@@ -78,6 +78,14 @@ Ffn::Ffn(const FfnConfig& cfg, Arena& arena) : cfg_(cfg) {
     upload_bf16(wd_, wd_h_);
 }
 
+void Ffn::load_weights_bf16(const void* gate, const void* up, const void* down) {
+    const int D = cfg_.d_model, F = cfg_.d_intermediate;
+    const size_t bf = sizeof(__nv_bfloat16);
+    CUDA_CHECK(cudaMemcpy(wg_, gate, (size_t)D * F * bf, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(wu_, up,   (size_t)D * F * bf, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(wd_, down, (size_t)F * D * bf, cudaMemcpyHostToDevice));
+}
+
 void Ffn::forward(const void* input, void* output, cublasHandle_t handle,
                   cudaStream_t stream) {
     CUBLAS_CHECK(cublasSetStream(handle, stream));

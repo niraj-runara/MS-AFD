@@ -26,6 +26,13 @@ set_target_properties(s15_ipc_fanout PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(s15_ipc_fanout PRIVATE src)
 target_link_libraries(s15_ipc_fanout PRIVATE CUDA::cublas)
 
+# M3-mini: one real MoE layer through the FFN, correctness vs HF reference.
+# cuBLAS + FFN, no NCCL.
+add_executable(m3_layer src/m3_layer.cu src/ffn.cu)
+set_target_properties(m3_layer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(m3_layer PRIVATE src)
+target_link_libraries(m3_layer PRIVATE CUDA::cublas)
+
 # --- NCCL (for Spike S1 / M2 fabric) -------------------------------------
 # Optional: the s1 spike only builds if NCCL is found, so the M0/M1 `slice`
 # target still builds on a box without NCCL.

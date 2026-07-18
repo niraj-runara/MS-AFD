@@ -134,6 +134,10 @@ def main() -> None:
     }
     with open(os.path.join(args.out, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
+    # Flat meta for the C++ side (no JSON parser needed):
+    # tokens d_model d_intermediate num_experts top_k
+    with open(os.path.join(args.out, "meta.txt"), "w") as f:
+        f.write(f"{T} {d_model} {d_ff} {n_exp} {top_k}\n")
 
     # Per-expert token load (the dynamic, uneven distribution the fabric must handle).
     counts = torch.bincount(topk_idx.reshape(-1), minlength=n_exp)

@@ -49,6 +49,12 @@ public:
     // in/out are host [tokens, d_model] fp32.
     void reference(const float* in, float* out) const;
 
+    // Overwrite the (randomly-initialized) weights with real ones uploaded from
+    // host bf16 buffers. Row-major, same layout as the arena regions:
+    //   gate,up: [d_model, d_intermediate]   down: [d_intermediate, d_model].
+    // Used by M3 to load real Qwen3 expert weights.
+    void load_weights_bf16(const void* gate, const void* up, const void* down);
+
     const FfnConfig& config() const { return cfg_; }
 
 private:
