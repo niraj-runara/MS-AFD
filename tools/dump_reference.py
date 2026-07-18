@@ -69,8 +69,14 @@ def main() -> None:
     def hook(_module, inputs, output):
         # input hidden states to the MoE block: [batch, seq, d_model]
         captured["hidden_in"] = inputs[0].detach()
-        # output can be a tensor or (tensor, router_logits) depending on version
-        captured["moe_out"] = output[0].detach() if isinstance(output, tuple) else output.detach()
+        # Qwen3's MoE block returns (final_hidden_states, router_logits); older/
+        # other versions may return just the tensor.
+        if isinstance(output, tuple):
+            captured["moe_out"] = output[0].detach()
+            if len(output) > 1 and torch.is_tensor(output[1]):
+                captured["router_logits"] = output[1].detach()
+        else:
+            captured["moe_out"] = output.detach()
 
     h = block.register_forward_hook(hook)
     ids = tok(args.prompt, return_tensors="pt").to("cuda")
@@ -82,9 +88,14 @@ def main() -> None:
     moe_out = captured["moe_out"].reshape(-1, d_model)           # [T, d_model]
     T = hidden.shape[0]
 
-    # Recompute the router exactly as Qwen3 does.
+    # Router logits: prefer the ones the block actually produced; else recompute.
     with torch.no_grad():
-        logits = block.gate(hidden.to(block.gate.weight.dtype))  # [T, n_exp]
+        if "router_logits" in captured:
+            logits = captured["router_logits"].reshape(-1, n_exp)
+        else:
+            g = block.gate(hidden.to(next(block.gate.parameters()).dtype))
+            logits = (g[0] if isinstance(g, tuple) else g).reshape(-1, n_exp)
+        # Qwen3 routing: softmax over all experts -> top-k -> optional renorm.
         probs = torch.softmax(logits.float(), dim=-1)
         topk_w, topk_idx = torch.topk(probs, top_k, dim=-1)      # [T, top_k]
         if norm:
