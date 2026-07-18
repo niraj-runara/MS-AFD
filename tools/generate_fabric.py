@@ -46,9 +46,10 @@ def main() -> None:
     layers = model.model.layers
     ids = tok(args.prompt, return_tensors="pt").to("cuda")
 
-    # --- reference: pure HF greedy generation --------------------------------
+    # --- reference: pure HF greedy generation + teacher-forced logits --------
     with torch.no_grad():
         ref = model.generate(**ids, max_new_tokens=args.max_new, do_sample=False)
+        hf_logits = model(ref).logits[0].float().cpu()   # [S, vocab] — pre-patch
     ref_ids = ref[0].tolist()
     print("reference (HF):", tok.decode(ref[0][ids.input_ids.shape[1]:]))
 
@@ -93,7 +94,17 @@ def main() -> None:
     for L in range(len(layers)):
         layers[L].mlp.forward = make_patch(layers[L].mlp)
 
-    # --- fabric-FFN greedy generation ----------------------------------------
+    # --- teacher-forced correctness: same tokens, compare distributions ------
+    # (factors out the greedy-decoding divergence cascade — the real metric.)
+    with torch.no_grad():
+        fab_logits = model(ref).logits[0].float().cpu()
+    hf_arg, fab_arg = hf_logits.argmax(-1), fab_logits.argmax(-1)
+    agree = (hf_arg == fab_arg).float().mean().item()
+    rel = ((hf_logits - fab_logits).norm() / (hf_logits.norm() + 1e-9)).item()
+    print(f"\nteacher-forced (on HF's tokens): next-token argmax agreement "
+          f"{agree * 100:.2f}%  |  logit rel-L2 {rel:.5f}")
+
+    # --- fabric-FFN greedy generation (illustrative; diverges via bf16) -------
     with torch.no_grad():
         fab = model.generate(**ids, max_new_tokens=args.max_new, do_sample=False)
     fab_ids = fab[0].tolist()
