@@ -40,6 +40,12 @@ set_target_properties(m3_fabric PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(m3_fabric PRIVATE src)
 target_link_libraries(m3_fabric PRIVATE CUDA::cublas)
 
+# M3-full Rungs 2-3: the MoE-FFN op as a shared lib HF calls via ctypes.
+add_library(msafd_moe SHARED src/moe_ffn_op.cu)
+set_target_properties(msafd_moe PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(msafd_moe PRIVATE src)
+target_link_libraries(msafd_moe PRIVATE CUDA::cublas CUDA::cudart)
+
 # --- NCCL (for Spike S1 / M2 fabric) -------------------------------------
 # Optional: the s1 spike only builds if NCCL is found, so the M0/M1 `slice`
 # target still builds on a box without NCCL.
