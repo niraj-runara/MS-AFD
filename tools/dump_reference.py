@@ -107,12 +107,24 @@ def main() -> None:
     topk_idx.to(torch.int32).cpu().numpy().tofile(os.path.join(args.out, "topk_idx.bin"))
     topk_w.to(torch.float32).cpu().numpy().tofile(os.path.join(args.out, "topk_w.bin"))
 
-    # Dump each expert's three weight matrices (row-major, matching ffn.cu).
+    # Fused experts (Qwen3MoeExperts): batched weight tensors, [out, in].
+    #   gate_up_proj: [E, 2*d_ff, d_model]  (rows 0:d_ff = gate, d_ff:2d_ff = up)
+    #   down_proj:    [E, d_model, d_ff]
+    # We split per expert and transpose to our row-major [in, out] (matches ffn.cu):
+    #   wg,wu = [d_model, d_ff]   wd = [d_ff, d_model]
+    # NB: the gate-vs-up row order (gate first) is an assumption — if the C++
+    # correctness gate shows a large rel-L2, swap the two halves here.
+    gate_up = block.experts.gate_up_proj   # [E, 2*d_ff, d_model]
+    down = block.experts.down_proj         # [E, d_model, d_ff]
+    assert gate_up.shape == (n_exp, 2 * d_ff, d_model), gate_up.shape
+    assert down.shape == (n_exp, d_model, d_ff), down.shape
     for e in range(n_exp):
-        ex = block.experts[e]
-        dump_bf16(ex.gate_proj.weight.t(), os.path.join(args.out, f"experts/e{e}_gate.bin"))
-        dump_bf16(ex.up_proj.weight.t(),   os.path.join(args.out, f"experts/e{e}_up.bin"))
-        dump_bf16(ex.down_proj.weight.t(), os.path.join(args.out, f"experts/e{e}_down.bin"))
+        gate_w = gate_up[e][:d_ff, :]          # [d_ff, d_model]
+        up_w   = gate_up[e][d_ff:2 * d_ff, :]  # [d_ff, d_model]
+        down_w = down[e]                        # [d_model, d_ff]
+        dump_bf16(gate_w.t(), os.path.join(args.out, f"experts/e{e}_gate.bin"))
+        dump_bf16(up_w.t(),   os.path.join(args.out, f"experts/e{e}_up.bin"))
+        dump_bf16(down_w.t(), os.path.join(args.out, f"experts/e{e}_down.bin"))
 
     meta = {
         "model": args.model, "layer": args.layer, "prompt": args.prompt,
