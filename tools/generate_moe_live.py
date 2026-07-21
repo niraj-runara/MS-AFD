@@ -91,7 +91,10 @@ def main() -> None:
                                ctypes.c_void_p(tw_c.data_ptr()),
                                ctypes.c_void_p(out.data_ptr()), T)
             out = out.reshape(shp)
-            return (out,) if returns_tuple else out
+            # Qwen3 MoE decoder unpacks `hidden, router_logits = self.mlp(...)`,
+            # so return the router logits (lg) as the 2nd element when the block
+            # returns a tuple. (Dense Llama returns a 1-tuple; MoE needs 2.)
+            return (out, lg) if returns_tuple else out
 
         return patched
 
