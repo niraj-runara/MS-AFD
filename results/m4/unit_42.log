@@ -1,0 +1,2 @@
+[unit 42] ready on GPU1 (MPS%=6)
+[unit 42] decode beats=255 p50=7.8009 p99=7.8471 p99/p50=1.006 -> results/m4/latency_L42.csv

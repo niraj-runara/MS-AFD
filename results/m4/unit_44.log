@@ -1,0 +1,2 @@
+[unit 44] ready on GPU3 (MPS%=6)
+[unit 44] decode beats=255 p50=7.7843 p99=7.8364 p99/p50=1.007 -> results/m4/latency_L44.csv

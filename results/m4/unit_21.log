@@ -1,0 +1,2 @@
+[unit 21] ready on GPU1 (MPS%=6)
+[unit 21] decode beats=256 p50=7.8031 p99=7.8498 p99/p50=1.006 -> results/m4/latency_L21.csv

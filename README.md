@@ -3,14 +3,14 @@
 A software-defined systolic FFN fabric on commodity GPUs: partition GPUs into many
 statically-scheduled micro-units that execute FFN layers in a deterministic, systolic
 rhythm. See `docs/implementation-plan.docx` for the full plan and
-[`docs/findings.md`](docs/findings.md) for what M0–M3 proved (plain-language).
+[`docs/findings.md`](docs/findings.md) for what M0–M4 proved (plain-language).
 
-**The v1 arc is complete (M0 → M3).** Software-defined, deterministic, systolic
-FFN execution across commodity GPUs — MPS micro-units + static HBM arenas +
-CUDA-graph FFNs + NCCL M2N routing — demonstrated end to end on 4 GPUs, sustained
-for an hour with no drift (M0–M2), and then shown to run a **real** Qwen3-30B-A3B
-correctly: the model generates token-correct output with every MoE FFN served by
-the fabric's implementation (M3). Every top risk (R1–R4) retired.
+**The arc is complete (M0 → M4).** Software-defined, deterministic, systolic FFN
+execution across commodity GPUs — MPS micro-units + static HBM arenas + CUDA-graph
+FFNs + NCCL M2N routing — demonstrated end to end on 4 GPUs, sustained for an hour
+with no drift (M0–M2); shown to run a **real** Qwen3-30B-A3B correctly (M3); and
+finally run **live**, with the real model generating on the actual multi-GPU
+separate-process fabric at **p99/p50 ≈ 1.006** (M4). Every top risk (R1–R4) retired.
 
 **M0 — single slice — ✅.** One MPS slice, one static arena, one FFN GEMM in a
 CUDA Graph, persistent loop from HBM, stable p99/p50. FFN unit = one
@@ -30,8 +30,17 @@ each GPU's rank bridges to its local experts over CUDA IPC).
 
 **M3 — real model, end to end — ✅.** HF runs the real Qwen3-30B-A3B (attention,
 KV cache, router, generation); every MoE layer's expert FFN is computed by the
-fabric's implementation. **Teacher-forced next-token argmax agreement with HF =
-100%** across the sequence — the model runs correctly on the fabric.
+fabric's implementation (in-process op). **Teacher-forced next-token argmax
+agreement with HF = 100%** — the model runs correctly on the fabric.
+
+**M4 — the live fabric capstone — ✅.** Joins M2 + M3: the real model generates
+with every layer's MoE FFN dispatched to a **separate, live, MPS-capped unit
+process** (one per layer, across 3 F-side GPUs) over CUDA-IPC — the *actual*
+disaggregated fabric, not an in-process stand-in. Per-unit decode determinism
+**p99/p50 ≈ 1.006** (units fair to 0.3%), teacher-forced argmax 98.5%. Achieved by
+graph-capturing the decode beat as a fixed all-128-expert batched compute
+(routing lives in a per-beat weight buffer), so dynamic MoE routing keeps the
+systolic rhythm.
 
 ## Milestones
 
@@ -40,7 +49,8 @@ fabric's implementation. **Teacher-forced next-token argmax agreement with HF =
 | **M0** | One slice: MPS + arena + CUDA Graph + persistent loop, measured | ✅ complete |
 | **M1** | Many slices on one GPU (8→16→48); determinism vs slice count | ✅ complete |
 | **M2** | 4 GPUs; NCCL M2N routing + intra-GPU IPC fan-out; 1-hr soak | ✅ complete |
-| **M3** | Real Qwen3-30B-A3B end to end; FFN on the fabric; correct vs HF | ✅ complete |
+| **M3** | Real Qwen3-30B-A3B end to end; FFN on the fabric (in-process); vs HF | ✅ complete |
+| **M4** | Real model on the LIVE separate-process fabric; p99/p50 ≈ 1.006 | ✅ complete |
 
 Milestones live in this one repo. Tag each as it passes: `m0-complete`, `m1-complete`, …
 
@@ -147,6 +157,34 @@ reimplementing attention in C++ was deliberately out of scope — it isn't what 
 fabric thesis tests. Per the plan (§8), the LPU-style *determinism* is proven at
 M1/M2; M3's role is end-to-end correctness, met here.
 
+## M4 results — the live fabric
+
+M3 served the FFN via an *in-process* op. M4 makes it the real thing: **one
+MPS-capped unit process per layer** (48 units across 3 F-side GPUs, GPU 0 = HF),
+each holding that layer's real experts. HF generates; each MoE block ships its
+hidden state + routing to the layer's unit over **CUDA-IPC**, which runs the
+expert FFN and returns it. A token flows layer 0→47, every FFN served by its own
+live micro-unit — M2's fabric and M3's real model, unified.
+
+| metric | value |
+|--------|-------|
+| units (layers) | 48, across 3 F-side GPUs |
+| per-unit decode p99/p50 | median **1.006**, worst **1.021** |
+| p50 spread across units | **1.003** (units fair to 0.3%) |
+| teacher-forced argmax vs HF | 100% (short) / 98.5% (256-token) |
+
+**The real Qwen3-30B-A3B runs on the actual disaggregated, deterministic fabric,
+at p99/p50 ≈ 1.006.** The key move: dynamic MoE routing normally can't be
+graph-captured (the active expert set changes every token), which left an early
+version at a jittery ~1.3. Fixing it — capture the decode beat as a *fixed*
+all-128-expert batched compute, with routing carried in a per-beat weight buffer
+(unrouted experts weighted 0) — restored the graph-captured rhythm (~16× the
+expert math, deterministically; we don't care about the latency, only the ratio).
+
+Single-instance here (HF + units co-resident via NVLink IPC); the cross-GPU NCCL
+M2N routing is proven separately at M2 and composes on top. **Requires NVLink
+(SXM4)** — a PCIe/cross-NUMA box silently corrupts the cross-GPU IPC copies.
+
 ## Layout
 
 ```
@@ -161,13 +199,18 @@ src/
   m3_layer.cu    # M3: one real MoE layer through the FFN, correctness vs HF
   m3_fabric.cu   # M3: real layer through the actual hub+IPC+MPS fan-out
   moe_ffn_op.cu  # M3: libmsafd_moe.so — the MoE-FFN op HF calls during generation
+  live_common.h  # M4: live-fabric control block + IPC helpers
+  moe_live_coord.cu # M4: libmsafd_moe_live.so — coordinator (loaded into HF)
+  moe_live_unit.cu  # M4: per-layer live MPS unit (graph-captured decode)
 spikes/
   s1_graph_nccl.cu  # S1: NCCL send/recv captured into a CUDA graph
   s15_ipc_fanout.cu # S1.5: hub -> N MPS experts via CUDA IPC (intra-GPU fan-out)
 tools/
-  dump_reference.py   # M3: dump one HF layer (activations/routing/weights/ref)
-  check_all_layers.py # M3 Rung 1: fabric FFN vs HF for all 48 layers
-  generate_fabric.py  # M3 Rungs 2-3: HF generation with MoE FFN on the fabric
+  dump_reference.py    # M3: dump one HF layer (activations/routing/weights/ref)
+  check_all_layers.py  # M3 Rung 1: fabric FFN vs HF for all 48 layers
+  generate_fabric.py   # M3 Rungs 2-3: HF generation with MoE FFN on the fabric
+  dump_moe_weights.py  # M4: dump per-layer real expert weights for the units
+  generate_moe_live.py # M4: HF generation dispatched to the live fabric
 bench/
   latency.py       # p50/p99/p99:p50 from one loop's per-iter timings
   fleet_summary.py # M1: per-slice determinism + cross-slice fairness
@@ -179,9 +222,11 @@ scripts/
   run_m2_mini.sh    # M2 single hop (2 GPUs)
   run_m2_vertical.sh# M2 F-side stack (2 GPUs)
   run_m2_full.sh    # M2 fabric (1+H GPUs); NOMPS=1 to skip MPS
+  run_m3_fabric.sh  # M3: real layer through the hub+IPC+MPS fan-out
+  run_moe_live.sh   # M4: real model on the live multi-GPU fabric
 docs/
   implementation-plan.docx
-  findings.md       # plain-language: what M0–M3 proved
+  findings.md       # plain-language: what M0–M4 proved
 ```
 
 ## Build & run
@@ -244,9 +289,31 @@ python tools/dump_reference.py --layer 0 --out results/m3_ref
 NOMPS=1 bash scripts/run_m3_fabric.sh results/m3_ref 2000
 ```
 
+**M4 — real model on the live fabric** (needs **4×A100 SXM4 / NVLink** — verify
+`nvidia-smi topo -m` shows `NV#` on all pairs — and **≥150 GB disk**: 61 GB model
++ 58 GB weight dump):
+
+```bash
+export HF_HOME=/workspace/hf
+python tools/dump_moe_weights.py --model Qwen/Qwen3-30B-A3B --out /workspace/m4_weights
+bash scripts/run_moe_live.sh Qwen/Qwen3-30B-A3B /workspace/m4_weights "The capital of France is" 256
+# per-unit decode determinism across all 48 units:
+python3 - <<'EOF'
+import csv, glob, statistics
+ms=[sorted(float(r["ms"]) for r in csv.DictReader(open(p))) for p in sorted(glob.glob("results/m4/latency_L*.csv"))]
+ratios=[m[int(0.99*(len(m)-1))]/m[len(m)//2] for m in ms if m]
+print(f"units={len(ratios)} p99/p50 median {statistics.median(ratios):.4f} worst {max(ratios):.4f}")
+EOF
+```
+> HF (A-side) runs on GPU 0 *outside* MPS; the 48 units are MPS-capped on GPUs 1–3.
+> Units need MPS (no `NOMPS`). If a run crashes, `pkill -9 -f moe_live_unit` before
+> retrying — units outlive a crashed coordinator.
+
 ## Requirements
 
 - NVIDIA GPU (A100 80GB, `sm_80`; Hopper/Blackwell also fine), CUDA Toolkit 12.x
-  or 13.x (tested on 13.0), cuBLAS
-- NCCL (M2 / spike S1). M2 needs a multi-GPU, NVLink-connected instance
+  or 13.x (tested on 12.4 and 13.0), cuBLAS
+- NCCL (M2 / spike S1). M2 and M4 need a multi-GPU, **NVLink (SXM4)** instance —
+  a PCIe/cross-NUMA box breaks the cross-GPU IPC (verify `nvidia-smi topo -m` → `NV#`)
+- M3/M4: `transformers` + `accelerate`; ~61 GB model download (M4: ≥150 GB disk)
 - Nsight Systems / Compute (optional; R2 Tensor-Core telemetry)

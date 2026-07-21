@@ -1,0 +1,2 @@
+[unit 10] ready on GPU2 (MPS%=6)
+[unit 10] decode beats=255 p50=7.7910 p99=7.8216 p99/p50=1.004 -> results/m4/latency_L10.csv

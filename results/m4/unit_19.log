@@ -1,0 +1,2 @@
+[unit 19] ready on GPU2 (MPS%=6)
+[unit 19] decode beats=255 p50=7.7909 p99=7.8379 p99/p50=1.006 -> results/m4/latency_L19.csv

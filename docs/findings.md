@@ -176,12 +176,45 @@ the fabric thesis tests.
   small to flip a non-tie argmax).
 
 **Finding.** The real Qwen3-30B-A3B generates **token-correct** output with every
-MoE FFN executed by the disaggregated micro-unit fabric. Per the plan (§8), the
-LPU-style *determinism* is proven at M1/M2; M3 is end-to-end correctness — met.
+MoE FFN executed by the fabric's implementation. But M3's FFN ran as an
+*in-process op* inside HF, not the live separate-process fabric — that's M4.
+
+## M4 — the live fabric (capstone)
+
+**Question.** Can the real model generate through the *actual* fabric — separate,
+live, MPS-capped unit processes over CUDA-IPC — not an in-process stand-in?
+
+**Setup.** One MPS-capped **unit process per layer** (48 units across 3 F-side
+GPUs; HF on GPU 0, outside MPS), each holding that layer's real experts. HF
+generates; each MoE block ships its hidden state + routing to the layer's unit
+over CUDA-IPC; the unit runs the expert FFN and returns it. A coordinator library
+loaded into HF owns the shared IPC tiles.
+
+**The determinism trap, and the fix.** A first version ran the decode FFN
+**eagerly** (each token routes to 8 *different* experts, so the active set changes
+every beat and can't be graph-captured). That reintroduced the CPU dispatch jitter
+CUDA Graphs had removed in M0–M2 — determinism sagged to **p99/p50 ≈ 1.3, worst
+2.6**. The fix: make the decode beat a **fixed** all-128-expert batched compute
+(`cublasGemmStridedBatchedEx`, the token broadcast across experts) plus an
+index-driven weighted combine — routing lives entirely in a per-beat weight buffer
+(unrouted experts weighted 0), so the graph is fixed and replayable. That restored
+the graph-captured rhythm (≈16× the expert math, deterministically — we don't care
+about the latency, only the ratio).
+
+**Finding.** With the graph-captured decode, per-unit determinism is **p99/p50 =
+1.006 (median), 1.021 (worst)**, units fair to **0.3%**, and correctness is
+unchanged (100% short / 98.5% on 256 tokens). **The real Qwen3-30B-A3B runs on the
+live, multi-GPU, 48-separate-process MoE fabric at an LPU-tight ~1.006** — M2's
+determinism and M3's correctness, unified into one live system.
+
+An operational note: this **requires NVLink (SXM4)**. A PCIe/cross-NUMA box
+(`topo -m` showing `SYS`/`NODE`, not `NV#`) silently corrupts the cross-GPU IPC
+copies — units on the far-NUMA GPUs return garbage, and generation collapses to
+0% agreement. Verify `NV#` on all pairs before trusting a run.
 
 ## What we have and haven't shown
 
-**Shown (M0–M3, the full v1 arc).**
+**Shown (M0–M4, the full arc).**
 - MPS gives real, fair compute isolation on an A100 (`pct` → SM share).
 - A static-arena + CUDA-Graph FFN executes deterministically from HBM.
 - Determinism and fairness hold whether one GPU is cleanly partitioned (up to 48
@@ -193,14 +226,16 @@ LPU-style *determinism* is proven at M1/M2; M3 is end-to-end correctness — met
   drift** (M2). Every top risk R1–R4 retired.
 - **A real Qwen3-30B-A3B generates token-correct output** with every MoE FFN
   served by the fabric (M3): 100% teacher-forced next-token agreement with HF.
+- **The real model runs on the *live* fabric** (M4): 48 separate MPS-capped unit
+  processes over CUDA-IPC, per-unit decode **p99/p50 ≈ 1.006**, correct vs HF.
+  The determinism thesis and real-model correctness, in one live system.
 
-**Not yet shown (out of scope for v1).**
-- We measure **rhythm stability**, not speed. Latency grows as slices shrink; we
-  don't care — the ratio is the metric.
-- M3's A-side is HuggingFace (real attention/KV/router), not our own C++ engine,
-  and generation drives the fabric's FFN via an in-process op — not the live
-  multi-process fabric (the plan's end-to-end determinism comparison is "context,
-  not a pass/fail"; core determinism is proven at M1/M2).
+**Not yet shown / out of scope.**
+- We measure **rhythm stability**, not speed. Latency grows as slices shrink (and
+  M4's all-128 decode is ~16× the math); we don't care — the ratio is the metric.
+- The A-side is HuggingFace (real attention/KV/router), not our own C++ engine —
+  reimplementing attention was deliberately off-thesis. M4 makes the *FFN* live on
+  the separate-process fabric; the A-side stays HF.
 - "Hundreds" of experts across the full fabric simultaneously: the mechanism is
   proven and scales cleanly, but the largest runs so far are 48 experts/GPU
   (S1.5) and 24 across the 3-GPU fabric (M2) — "hundreds live" is extrapolation.

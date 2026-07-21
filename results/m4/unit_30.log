@@ -1,0 +1,2 @@
+[unit 30] ready on GPU1 (MPS%=6)
+[unit 30] decode beats=255 p50=7.8003 p99=7.8538 p99/p50=1.007 -> results/m4/latency_L30.csv
