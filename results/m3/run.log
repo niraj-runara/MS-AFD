@@ -1,0 +1,54 @@
+===== M3-dense Tue Jul 21 13:46:46 UTC 2026 | model=meta-llama/Meta-Llama-3-8B =====
+[100%] Built target msafd_dense
+
+===== Rung 1 — all-layers correctness =====
+model meta-llama/Meta-Llama-3-8B: 32 layers, D=4096 F=14336
+layer  0: rel-L2 vs HF = 0.00177
+layer  1: rel-L2 vs HF = 0.00003
+layer  2: rel-L2 vs HF = 0.00319
+layer  3: rel-L2 vs HF = 0.00339
+layer  4: rel-L2 vs HF = 0.00380
+layer  5: rel-L2 vs HF = 0.00341
+layer  6: rel-L2 vs HF = 0.00327
+layer  7: rel-L2 vs HF = 0.00322
+layer  8: rel-L2 vs HF = 0.00342
+layer  9: rel-L2 vs HF = 0.00345
+layer 10: rel-L2 vs HF = 0.00307
+layer 11: rel-L2 vs HF = 0.00347
+layer 12: rel-L2 vs HF = 0.00347
+layer 13: rel-L2 vs HF = 0.00359
+layer 14: rel-L2 vs HF = 0.00338
+layer 15: rel-L2 vs HF = 0.00383
+layer 16: rel-L2 vs HF = 0.00351
+layer 17: rel-L2 vs HF = 0.00363
+layer 18: rel-L2 vs HF = 0.00340
+layer 19: rel-L2 vs HF = 0.00349
+layer 20: rel-L2 vs HF = 0.00339
+layer 21: rel-L2 vs HF = 0.00349
+layer 22: rel-L2 vs HF = 0.00322
+layer 23: rel-L2 vs HF = 0.00328
+layer 24: rel-L2 vs HF = 0.00344
+layer 25: rel-L2 vs HF = 0.00337
+layer 26: rel-L2 vs HF = 0.00349
+layer 27: rel-L2 vs HF = 0.00334
+layer 28: rel-L2 vs HF = 0.00362
+layer 29: rel-L2 vs HF = 0.00308
+layer 30: rel-L2 vs HF = 0.00251
+layer 31: rel-L2 vs HF = 0.00104
+
+=== all-layers correctness ===
+layers checked      : 32
+rel-L2 min/mean/max : 0.00003 / 0.00316 / 0.00383
+worst layer         : L15 @ 0.00383
+PASS
+
+===== Rungs 2-3 — generation vs HF =====
+reference (HF):  Paris. It is located in the north of the country. The city is situated on the banks of
+
+[Rung 2] teacher-forced next-token argmax agreement 96.15%  |  logit rel-L2 0.01035
+fabric-FFN   :  Paris. It is located in the north of the country. The city is situated on the banks of
+
+[Rung 3] generated tokens matched: 20/20
+PASS — fabric-FFN generation is token-identical to HF
+
+===== M3-dense DONE Tue Jul 21 13:47:42 UTC 2026 =====

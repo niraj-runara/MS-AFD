@@ -18,6 +18,12 @@ add_executable(slice src/slice.cu)
 target_include_directories(slice PRIVATE src)
 target_link_libraries(slice PRIVATE CUDA::cublas CUDA::cudart)
 
+# M3 (dense): the dense-FFN op HF calls via ctypes during generation.
+add_library(msafd_dense SHARED src/dense_ffn_op.cu)
+set_target_properties(msafd_dense PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(msafd_dense PRIVATE src)
+target_link_libraries(msafd_dense PRIVATE CUDA::cublas CUDA::cudart)
+
 # --- NCCL (M2 dense fabric) ----------------------------------------------
 # Optional so the M0/M1 `slice` target still builds on a box without NCCL.
 find_path(NCCL_INCLUDE_DIR nccl.h
