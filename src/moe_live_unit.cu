@@ -44,6 +44,32 @@ __global__ void swiglu_k(const bf16* gate, const bf16* up, bf16* out, int n) {
         out[i] = __float2bfloat16((g / (1.0f + __expf(-g))) * u);
     }
 }
+// Batched over `batch` experts: C[b][M,N] = act[b][M,K] @ Bhf[b][N,K]^T.
+// act_stride=0 broadcasts a single activation across all experts (decode T=1).
+static void gemm_linear_batched(cublasHandle_t h, const bf16* act, long act_stride,
+                                const bf16* Bhf, long Bhf_stride, bf16* C, long C_stride,
+                                int M, int K, int N, int batch, cudaStream_t s) {
+    const float alpha = 1.0f, beta = 0.0f;
+    CUBLAS_CHECK(cublasSetStream(h, s));
+    CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+        h, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, &alpha,
+        Bhf, CUDA_R_16BF, K, Bhf_stride,
+        act, CUDA_R_16BF, K, act_stride,
+        &beta, C, CUDA_R_16BF, N, C_stride,
+        batch, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
+}
+
+// out[d] = sum_e w[e] * Ob[e*D + d]  — router-weighted combine over ALL E experts
+// (unrouted experts have w[e]=0). Fixed kernel; the per-beat routing lives in w[].
+__global__ void combine_all_k(bf16* out, const bf16* Ob, const float* w, int D, int E) {
+    int d = blockIdx.x * blockDim.x + threadIdx.x;
+    if (d < D) {
+        float acc = 0.0f;
+        for (int e = 0; e < E; ++e) acc += w[e] * __bfloat162float(Ob[(size_t)e * D + d]);
+        out[d] = __float2bfloat16(acc);
+    }
+}
+
 __global__ void waxpy_k(bf16* out, const bf16* src, float w, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) out[i] = __float2bfloat16(__bfloat162float(out[i]) + w * __bfloat162float(src[i]));
@@ -148,6 +174,37 @@ int main(int argc, char** argv) {
         }
     };
 
+    // --- graph-captured DECODE path (T=1): all n_exp experts, batched, fixed shape ---
+    // Every beat runs the same graph: broadcast the single token to all experts
+    // (batched GEMMs), SwiGLU, then a router-weighted combine over all experts
+    // (unrouted ones weighted 0). Routing changes only w128 (a device buffer), so
+    // the graph is fixed and replayable -> no per-beat CPU dispatch jitter.
+    bf16 *Gb, *Ub, *Hb, *Ob;
+    LIVE_CUDA_CHECK(cudaMalloc(&Gb, (size_t)n_exp * F * sizeof(bf16)));
+    LIVE_CUDA_CHECK(cudaMalloc(&Ub, (size_t)n_exp * F * sizeof(bf16)));
+    LIVE_CUDA_CHECK(cudaMalloc(&Hb, (size_t)n_exp * F * sizeof(bf16)));
+    LIVE_CUDA_CHECK(cudaMalloc(&Ob, (size_t)n_exp * D * sizeof(bf16)));
+    float* w128; LIVE_CUDA_CHECK(cudaMalloc(&w128, (size_t)n_exp * sizeof(float)));
+    std::vector<float> w128h(n_exp);
+
+    auto decode_compute = [&]() {
+        const int thr = 256;
+        gemm_linear_batched(handle, lin, 0, GU, guStride, Gb, F, 1, D, F, n_exp, stream);
+        gemm_linear_batched(handle, lin, 0, GU + (size_t)F * D, guStride, Ub, F, 1, D, F, n_exp, stream);
+        int n = n_exp * F, blk = (n + thr - 1) / thr;
+        swiglu_k<<<blk, thr, 0, stream>>>(Gb, Ub, Hb, n);
+        gemm_linear_batched(handle, Hb, F, DN, dnStride, Ob, D, 1, F, D, n_exp, stream);
+        int dblk = (D + thr - 1) / thr;
+        combine_all_k<<<dblk, thr, 0, stream>>>(lout, Ob, w128, D, n_exp);
+    };
+    decode_compute();                                   // pre-warm cuBLAS
+    LIVE_CUDA_CHECK(cudaStreamSynchronize(stream));
+    cudaGraph_t dgraph; cudaGraphExec_t dexec;
+    LIVE_CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    decode_compute();
+    LIVE_CUDA_CHECK(cudaStreamEndCapture(stream, &dgraph));
+    LIVE_CUDA_CHECK(cudaGraphInstantiate(&dexec, dgraph, 0));
+
     cudaEvent_t s0, s1;
     LIVE_CUDA_CHECK(cudaEventCreate(&s0)); LIVE_CUDA_CHECK(cudaEventCreate(&s1));
 
@@ -166,15 +223,30 @@ int main(int argc, char** argv) {
         int T = c->T;
         for (int i = 0; i < T * top_k; ++i) { tki[i] = c->topk_idx[i]; tkw[i] = c->topk_w[i]; }
 
-        LIVE_CUDA_CHECK(cudaEventRecord(s0, stream));
-        LIVE_CUDA_CHECK(cudaMemcpyAsync(lin, g_in, (size_t)T * D * sizeof(bf16),
-                                        cudaMemcpyDefault, stream));   // GPU0 -> unit GPU (P2P)
-        moe(T, tki.data(), tkw.data());
-        LIVE_CUDA_CHECK(cudaMemcpyAsync(g_out, lout, (size_t)T * D * sizeof(bf16),
-                                        cudaMemcpyDefault, stream));   // unit GPU -> GPU0 (P2P)
-        LIVE_CUDA_CHECK(cudaEventRecord(s1, stream));
-        LIVE_CUDA_CHECK(cudaStreamSynchronize(stream));
-        if (T == 1) { float t; LIVE_CUDA_CHECK(cudaEventElapsedTime(&t, s0, s1)); ms.push_back(t); }
+        if (T == 1) {
+            // decode: graph-replayed, all-expert batched compute (index-driven).
+            for (int e = 0; e < n_exp; ++e) w128h[e] = 0.0f;
+            for (int k = 0; k < top_k; ++k) w128h[tki[k]] += tkw[k];
+            LIVE_CUDA_CHECK(cudaEventRecord(s0, stream));
+            LIVE_CUDA_CHECK(cudaMemcpyAsync(lin, g_in, (size_t)D * sizeof(bf16),
+                                            cudaMemcpyDefault, stream));         // P2P in
+            LIVE_CUDA_CHECK(cudaMemcpyAsync(w128, w128h.data(), (size_t)n_exp * sizeof(float),
+                                            cudaMemcpyHostToDevice, stream));
+            LIVE_CUDA_CHECK(cudaGraphLaunch(dexec, stream));                     // fixed graph
+            LIVE_CUDA_CHECK(cudaMemcpyAsync(g_out, lout, (size_t)D * sizeof(bf16),
+                                            cudaMemcpyDefault, stream));         // P2P out
+            LIVE_CUDA_CHECK(cudaEventRecord(s1, stream));
+            LIVE_CUDA_CHECK(cudaStreamSynchronize(stream));
+            float t; LIVE_CUDA_CHECK(cudaEventElapsedTime(&t, s0, s1)); ms.push_back(t);
+        } else {
+            // prefill: eager capacity-padded MoE (not the systolic beat we measure).
+            LIVE_CUDA_CHECK(cudaMemcpyAsync(lin, g_in, (size_t)T * D * sizeof(bf16),
+                                            cudaMemcpyDefault, stream));
+            moe(T, tki.data(), tkw.data());
+            LIVE_CUDA_CHECK(cudaMemcpyAsync(g_out, lout, (size_t)T * D * sizeof(bf16),
+                                            cudaMemcpyDefault, stream));
+            LIVE_CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
         c->done_epoch = last;
     }
 
