@@ -41,7 +41,7 @@ def main() -> None:
     dev = f"cuda:{args.device}"
     tok = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, dtype=torch.bfloat16, device_map=dev
+        args.model, torch_dtype=torch.bfloat16, device_map=dev
     )
     model.eval()
     cfg = model.config
