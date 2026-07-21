@@ -46,6 +46,17 @@ set_target_properties(msafd_moe PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(msafd_moe PRIVATE src)
 target_link_libraries(msafd_moe PRIVATE CUDA::cublas CUDA::cudart)
 
+# M4: the LIVE MoE fabric — coordinator lib (loaded into HF) + per-layer unit.
+add_library(msafd_moe_live SHARED src/moe_live_coord.cu)
+set_target_properties(msafd_moe_live PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(msafd_moe_live PRIVATE src)
+target_link_libraries(msafd_moe_live PRIVATE CUDA::cudart)
+
+add_executable(moe_live_unit src/moe_live_unit.cu)
+set_target_properties(moe_live_unit PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(moe_live_unit PRIVATE src)
+target_link_libraries(moe_live_unit PRIVATE CUDA::cublas)
+
 # --- NCCL (for Spike S1 / M2 fabric) -------------------------------------
 # Optional: the s1 spike only builds if NCCL is found, so the M0/M1 `slice`
 # target still builds on a box without NCCL.
