@@ -64,10 +64,15 @@ def main() -> None:
     lib.msafd_live_init(n_layers, D, args.t_max, args.device, n_exp, top_k,
                         args.hdir.encode(), args.ctrl.encode())
 
+    # Match whatever this transformers version's MoE block returns, so the
+    # decoder's unpacking works across versions:
+    #   bare tensor         -> return out
+    #   1-tuple (out,)      -> return (out,)      [older / dense-style blocks]
+    #   2+-tuple (out, r)   -> return (out, lg)   [Qwen3 MoE decoder unpacks 2]
     dummy = torch.zeros(1, 1, D, dtype=torch.bfloat16, device=dev)
     with torch.no_grad():
         probe = type(layers[0].mlp).forward(layers[0].mlp, dummy)
-    returns_tuple = isinstance(probe, tuple)
+    probe_len = len(probe) if isinstance(probe, tuple) else 0
 
     def make_patch(L, mlp):
         gate = mlp.gate
@@ -91,10 +96,12 @@ def main() -> None:
                                ctypes.c_void_p(tw_c.data_ptr()),
                                ctypes.c_void_p(out.data_ptr()), T)
             out = out.reshape(shp)
-            # Qwen3 MoE decoder unpacks `hidden, router_logits = self.mlp(...)`,
-            # so return the router logits (lg) as the 2nd element when the block
-            # returns a tuple. (Dense Llama returns a 1-tuple; MoE needs 2.)
-            return (out, lg) if returns_tuple else out
+            # Return the same arity the block does (see probe above).
+            if probe_len == 0:
+                return out
+            if probe_len == 1:
+                return (out,)
+            return (out, lg)   # 2-tuple: (hidden, router_logits)
 
         return patched
 
