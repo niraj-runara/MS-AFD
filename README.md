@@ -4,16 +4,17 @@ A software-defined systolic FFN fabric on commodity GPUs: partition GPUs into ma
 statically-scheduled micro-units that execute FFN layers in a deterministic, systolic
 rhythm. See `docs/implementation-plan.docx` for the full plan.
 
-**Current milestone: M0 — single slice.**
-Prove one MPS slice, one 1 GB static arena, one FFN GEMM captured in a CUDA Graph,
-running in a persistent loop from HBM with stable (low p99/p50) latency.
+This repo is the **dense-model track** (Llama-3 8B dense FFN). A parallel MoE track
+(Qwen3-30B-A3B) lives on the `*-niraj` branches; the two share the same mechanism
+and cross-reference each other's findings.
 
 Target GPU: **A100 (Ampere, sm_80)**. Model: **Llama-3 8B dense FFN** — SwiGLU,
 `d_model=4096`, `d_intermediate=14336`, fp16 storage / fp32 accumulation.
 
-> Status: **M0 complete.** Built + run on a 1× A100 80GB (RunPod). Under a 10% MPS
-> SM cap: p50 4.493 ms, p99 4.500 ms, **p99/p50 = 1.001** (std 6.5 µs), graph
-> output bit-exact vs eager. Full numbers in [results/m0/RESULTS.md](results/m0/RESULTS.md).
+> Status: **M0, M1, M2 complete.** M2 runs the disaggregated fabric across 2× A100
+> over NVLink — A-side scatters token tiles (NCCL) → per-GPU hub → CUDA-IPC fan-out
+> to MPS micro-units → gather. At 48 units the whole-fabric beat holds
+> **p99/p50 = 1.009**. Full numbers in [results/m2/RESULTS.md](results/m2/RESULTS.md).
 
 ## Milestones
 
@@ -21,8 +22,8 @@ Target GPU: **A100 (Ampere, sm_80)**. Model: **Llama-3 8B dense FFN** — SwiGLU
 |-----------|-------|--------|
 | **M0** | One slice: MPS + arena + CUDA Graph + persistent loop, measured | ✅ complete (p99/p50=1.001) |
 | **M1** | Many slices on one GPU (8→16→48); determinism vs slice count | ✅ complete (p99/p50=1.011 @48) |
-| M2 | All 4 F-side GPUs; NCCL M2N routing | ⬜ later |
-| M3 | Real A-side + real MoE model, end to end | ⬜ later |
+| **M2** | 2 GPUs: NCCL scatter/gather + per-GPU hub + CUDA-IPC fan-out to MPS units | ✅ complete (fabric beat p99/p50=1.009 @48) |
+| M3 | Real Llama-3 8B end to end; dense FFN on the fabric, correct vs HF | ⬜ next |
 
 Milestones live in this one repo. Tag each as it passes: `m0-complete`, `m1-complete`, …
 
@@ -30,13 +31,20 @@ Milestones live in this one repo. Tag each as it passes: `m0-complete`, `m1-comp
 
 ```
 src/
-  arena.h     # static 1 GB HBM arena + fixed-offset allocator      (Step 2)
-  ffn.h       # FFN GEMM shape / weights                            (Step 3)
-  slice.cu    # MPS slice: FFN -> CUDA Graph -> persistent loop      (Steps 1,3,4,5)
+  arena.h      # static HBM arena + fixed-offset allocator
+  ffn.h        # dense Llama-3 8B FFN (SwiGLU) shape / weights / forward
+  slice.cu     # M0/M1: MPS slice — FFN -> CUDA Graph -> persistent loop
+  m2_dense.cu  # M2: aside / hub / unit — NCCL scatter + IPC fan-out to MPS units
 bench/
-  latency.py  # p50 / p99 / p99:p50 from the loop's per-iter timings (Step 6)
+  latency.py    # p50 / p99 / p99:p50 from a loop's per-iter timings
+  aggregate.py  # per-unit determinism + cross-unit fairness (M1 & M2)
+  plot_m1.py    # M1 determinism-vs-slice-count figure
+  plot_m2.py    # M2 fabric-determinism-vs-unit-count figure
 scripts/
-  start_mps.sh   # launch the MPS daemon + client                    (Step 1)
+  start_mps.sh          # launch the MPS daemon + client
+  run_slices.sh         # M1: N concurrent slices on one GPU
+  run_m2_dense.sh       # M2: A-side + hub + N MPS units (1+H GPUs)
+  m2_dense_autorun.sh   # M2: unattended sweep -> summary CSVs
 docs/
   implementation-plan.docx
 ```

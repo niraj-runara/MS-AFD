@@ -1,0 +1,6 @@
+mode,slices,pct_each,slice_p50_ms_median,slice_p99_ms_worst,ratio_median,ratio_worst
+m2_dense,1,100,0.4861,0.5709,1.1745,1.1745
+m2_dense,8,12,4.2359,4.3271,1.0201,1.0220
+m2_dense,16,6,8.7425,8.9722,1.0253,1.0262
+m2_dense,32,3,25.0756,25.3045,1.0084,1.0087
+m2_dense,48,2,37.3041,37.6988,1.0099,1.0111

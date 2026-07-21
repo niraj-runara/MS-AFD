@@ -21,3 +21,7 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# Raw per-run result CSVs (large; committed artifacts are summaries + plots)
+results/m2/m2_dense/
+results/m2/m2_soak_aside.csv
