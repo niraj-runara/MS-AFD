@@ -194,10 +194,17 @@ int main(int argc, char** argv) {
     // overlap and we measure real steady-state contention (no-op in M0).
     barrier_wait();
 
+    // G2 control: MSAFD_EAGER=1 runs the FFN eagerly (separate kernel launches,
+    // no CUDA-graph replay) so we can measure the graph discipline's contribution
+    // to determinism against an otherwise-identical naive loop.
+    const bool eager_mode = std::getenv("MSAFD_EAGER") != nullptr;
+    if (eager_mode) printf("[loop] MODE=eager (no graph)\n");
+
     std::vector<float> ms(iters);
     for (int i = 0; i < iters; ++i) {
         MSAFD_CUDA_CHECK(cudaEventRecord(start, stream));
-        MSAFD_CUDA_CHECK(cudaGraphLaunch(exec, stream));
+        if (eager_mode) ffn.forward(input, output, stream);
+        else            MSAFD_CUDA_CHECK(cudaGraphLaunch(exec, stream));
         MSAFD_CUDA_CHECK(cudaEventRecord(stop, stream));
         MSAFD_CUDA_CHECK(cudaEventSynchronize(stop));
         MSAFD_CUDA_CHECK(cudaEventElapsedTime(&ms[i], start, stop));

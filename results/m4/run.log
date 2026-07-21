@@ -1,0 +1,25 @@
+===== M4-live Tue Jul 21 14:53:05 UTC 2026 | model=meta-llama/Meta-Llama-3-8B layers=32 D=4096 F=14336 pct=3% =====
+launched 32 units
+[coord] waiting for 32 units...
+[coord] all 32 units ready — live fabric up
+reference (HF):  Paris. It is located in the north of the country. The city is situated on the banks of the Seine River. Paris is the largest city in France. It is also the largest city in the European Union. The city is home to many famous landmarks, including the Eiffel Tower, the Louvre Museum, and the Notre Dame Cathedral. Paris is a popular tourist destination. It is also a major business center. The city is home to many international companies. Paris is a beautiful city with a rich history. It is a must-see destination for anyone visiting France.
+The capital of France is Paris. It is located in the north of the country. The city is situated on the banks of the Seine River. Paris is the largest city in France. It is also the largest city in the European Union. The city is home to many famous landmarks, including the Eiffel Tower, the Louvre Museum, and the Notre Dame Cathedral. Paris is a popular tourist destination. It is also a major business center. The city is home to many international companies. Paris is a beautiful city with a rich history. It is a must-see destination for anyone visiting France.<|end_of_text|>
+
+[Rung 2] teacher-forced next-token argmax agreement 99.19%  |  logit rel-L2 0.01352
+live-fabric  :  Paris, which is located in the north of the country. The city is located on the Seine River and is the largest city in France. Paris is a major tourist destination and is home to many famous landmarks, including the Eiffel Tower, the Louvre Museum, and the Notre Dame Cathedral. The city is also known for its fashion, food, and art.
+The capital of France is Paris, which is located in the north of the country. The city is located on the Seine River and is the largest city in France. Paris is a major tourist destination and is home to many famous landmarks, including the Eiffel Tower, the Louvre Museum, and the Notre Dame Cathedral. The city is also known for its fashion, food, and art.
+The capital of France is Paris, which is located in the north of the country. The city is located on the Seine River and is the largest city in France. Paris is a major tourist destination and is home to many famous landmarks, including the Eiffel Tower, the Louvre Museum, and the Notre Dame Cathedral. The city is also known for its fashion, food, and art.
+The capital of France is Paris, which is located in the north of the country. The city is located
+
+[Rung 3] generated tokens matched: 16/240
+first divergence at generated token 1: HF=13 fabric=11
+(late divergence is typically a bf16 greedy near-tie; Rung 2 is the metric)
+waiting for units to finish...
+
+===== per-unit decode determinism =====
+
+=== M1 m4_live  N=32  pct_each=3%  (32 slices) ===
+  per-slice p50   : min 12.982  median 12.985  max 12.988 ms
+  per-slice p99   : min 13.036  median 13.043  max 13.054 ms
+  per-slice p99/p50: min 1.0040  median 1.0045  WORST 1.0053
+===== M4-live DONE Tue Jul 21 14:55:28 UTC 2026 rc=0 =====

@@ -24,6 +24,19 @@ set_target_properties(msafd_dense PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(msafd_dense PRIVATE src)
 target_link_libraries(msafd_dense PRIVATE CUDA::cublas CUDA::cudart)
 
+# M4 (G1): the LIVE fabric — real model served by separate MPS unit processes.
+#   m3_live_unit : one process per layer (real weights, IPC, graph-timed FFN)
+#   msafd_live   : coordinator lib HF loads to dispatch each layer over IPC
+add_executable(m3_live_unit src/m3_live_unit.cu)
+set_target_properties(m3_live_unit PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(m3_live_unit PRIVATE src)
+target_link_libraries(m3_live_unit PRIVATE CUDA::cublas CUDA::cudart)
+
+add_library(msafd_live SHARED src/m3_live_coord.cu)
+set_target_properties(msafd_live PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(msafd_live PRIVATE src)
+target_link_libraries(msafd_live PRIVATE CUDA::cudart)
+
 # --- NCCL (M2 dense fabric) ----------------------------------------------
 # Optional so the M0/M1 `slice` target still builds on a box without NCCL.
 find_path(NCCL_INCLUDE_DIR nccl.h
