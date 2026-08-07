@@ -98,13 +98,24 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.model)
     if args.mode == "fabric":
         # MS-AFD: HF never uses its experts (the fabric units do), so offload them
-        # to CPU — only the ~3 GB non-expert A-side sits on the GPU, which fits a
-        # small card. Longest-prefix device_map: everything on GPU, experts on CPU.
+        # to CPU — only the ~3 GB non-expert A-side sits on the GPU. Build the map at
+        # LEAF granularity: accelerate stops recursing at the first key it matches, so
+        # a broad {"model": gpu} key would swallow the experts before the deeper
+        # ".mlp.experts": "cpu" overrides are ever seen (silent OOM). Leaf keys have no
+        # descendants, so nothing overrides them — and this also survives the fused
+        # Qwen3MoeExperts vs ModuleList drift automatically.
         from transformers import AutoConfig
-        nl = AutoConfig.from_pretrained(args.model).num_hidden_layers
-        device_map = {"model": args.device, "lm_head": args.device}
-        for L in range(nl):
-            device_map[f"model.layers.{L}.mlp.experts"] = "cpu"
+        from accelerate import init_empty_weights
+        cfg = AutoConfig.from_pretrained(args.model)
+        with init_empty_weights():
+            sk = AutoModelForCausalLM.from_config(cfg)
+        device_map = {}
+        for name, mod in sk.named_modules():
+            if len(list(mod.children())) == 0 and (
+                    any(True for _ in mod.parameters(recurse=False))
+                    or any(True for _ in mod.buffers(recurse=False))):
+                device_map[name] = "cpu" if "mlp.experts" in name else args.device
+        del sk
         model = AutoModelForCausalLM.from_pretrained(
             args.model, torch_dtype=torch.bfloat16, device_map=device_map)
     elif args.baseline_gpus > 1:
