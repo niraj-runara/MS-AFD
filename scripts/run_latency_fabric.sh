@@ -19,8 +19,16 @@ T_MAX=${5:-1024}
 read -r N_LAYERS D F N_EXP TOP_K < "$WDIR/config.txt"
 NGPU=$(nvidia-smi -L | wc -l | tr -d ' ')
 [ "$NGPU" -ge 2 ] || { echo "need >=2 GPUs" >&2; exit 1; }
-# HF's experts are offloaded (~3 GB A-side on GPU0), so units use ALL GPUs incl 0.
-UPG=$(( (N_LAYERS + NGPU - 1) / NGPU )); PCT=$(( 100 / UPG )); [ "$PCT" -lt 1 ] && PCT=1
+# GPU0 also hosts HF's A-side (~10 GB), so it gets FEWER units than the others.
+# 2-GPU: ~40% of units on GPU0, rest on GPU1. 3+ GPUs: even (GPU0's HF share fits).
+if [ "$NGPU" -eq 2 ]; then
+    N0=$(( N_LAYERS * 2 / 5 ))                 # units on GPU0
+    MAXU=$(( N_LAYERS - N0 ))                  # GPU1 carries the most
+else
+    N0=-1
+    MAXU=$(( (N_LAYERS + NGPU - 1) / NGPU ))
+fi
+PCT=$(( 100 / MAXU )); [ "$PCT" -lt 1 ] && PCT=1
 
 OUT=results/cmp; mkdir -p "$OUT"
 CTRL=/dev/shm/moelive_ctrl; HDIR=/dev/shm/moelive_h
@@ -35,7 +43,11 @@ echo "start_server -uid $(id -u)" | nvidia-cuda-mps-control 2>/dev/null || true;
 
 unit_pids=()
 for ((L=0; L<N_LAYERS; L++)); do
-    DEV=$(( L % NGPU ))
+    if [ "$N0" -ge 0 ]; then
+        if [ "$L" -lt "$N0" ]; then DEV=0; else DEV=1; fi   # 2-GPU skew
+    else
+        DEV=$(( L % NGPU ))
+    fi
     CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$PCT" \
         ./build/moe_live_unit "$L" "$N_LAYERS" "$D" "$F" "$N_EXP" "$TOP_K" "$T_MAX" \
         "$CTRL" "$HDIR" "$WDIR" "$DEV" "$OUT/fabric_unit_L${L}.csv" \
@@ -45,6 +57,7 @@ done
 echo "launched $N_LAYERS units"
 
 env -u CUDA_MPS_PIPE_DIRECTORY -u CUDA_MPS_LOG_DIRECTORY -u CUDA_MPS_ACTIVE_THREAD_PERCENTAGE \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     python3 tools/latency_bench.py --mode fabric --model "$MODEL" \
     --lib build/libmsafd_moe_live.so --hdir "$HDIR" --ctrl "$CTRL" --t-max "$T_MAX" \
     --device 0 --prompt "$PROMPT" --max-new "$MAX_NEW" --out "$OUT/fabric.csv" 2>&1 | tee "$OUT/fabric.log"
