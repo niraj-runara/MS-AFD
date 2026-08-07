@@ -17,7 +17,8 @@ T_MAX=${5:-1024}
 
 [ -f "$WDIR/config.txt" ] || { echo "!! no $WDIR/config.txt — run tools/dump_moe_weights.py first" >&2; exit 1; }
 read -r N_LAYERS D F N_EXP TOP_K < "$WDIR/config.txt"
-NGPU=$(nvidia-smi -L | wc -l | tr -d ' ')
+# Use NGPU_USE GPUs if set (e.g. NGPU_USE=3 on a 4-GPU box), else all detected.
+NGPU=${NGPU_USE:-$(nvidia-smi -L | wc -l | tr -d ' ')}
 [ "$NGPU" -ge 2 ] || { echo "need >=2 GPUs" >&2; exit 1; }
 # GPU0 also hosts HF's A-side (~10 GB), so it gets FEWER units than the others.
 # 2-GPU: ~40% of units on GPU0, rest on GPU1. 3+ GPUs: even (GPU0's HF share fits).
