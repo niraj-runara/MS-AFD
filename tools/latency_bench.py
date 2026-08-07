@@ -43,10 +43,25 @@ def install_fabric(model, args):
     lib.msafd_live_init(n_layers, D, args.t_max, args.device, n_exp, top_k,
                         args.hdir.encode(), args.ctrl.encode())
 
+    # Probe the block's return arity (bare tensor / (tensor,) / (tensor, router_logits))
+    # WITHOUT running the real experts — they're offloaded to CPU, so the true forward
+    # would crash on a device mismatch (and we never want HF to compute them anyway).
+    # Stub the experts submodule to return an on-device zero tensor of the combined
+    # shape [n_tokens, D]; only the block's router/combine plumbing runs.
+    from accelerate.hooks import remove_hook_from_module
     dummy = torch.zeros(1, 1, D, dtype=torch.bfloat16, device=dev)
-    with torch.no_grad():
-        probe = type(layers[0].mlp).forward(layers[0].mlp, dummy)
+    mlp0 = layers[0].mlp
+    n_tok = dummy.shape[0] * dummy.shape[1]
+    remove_hook_from_module(mlp0.experts)   # drop the CPU-offload hook; HF never runs these
+    orig_fwd = mlp0.experts.forward
+    mlp0.experts.forward = lambda *a, **k: torch.zeros(n_tok, D, dtype=dummy.dtype, device=dummy.device)
+    try:
+        with torch.no_grad():
+            probe = type(mlp0).forward(mlp0, dummy)
+    finally:
+        mlp0.experts.forward = orig_fwd
     probe_len = len(probe) if isinstance(probe, tuple) else 0
+    print(f"[fabric] block return arity: probe_len={probe_len}", flush=True)
 
     def make_patch(L, mlp):
         gate = mlp.gate
