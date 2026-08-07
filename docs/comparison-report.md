@@ -55,7 +55,38 @@ GPU" is a reported finding, not hidden.
 
 ---
 
-## 3. Results (3 runs each, 247 decode tokens per run)
+## 3. Fabric layout — how the GPUs are sliced
+
+MS-AFD carves the 3 GPUs into **48 independent micro-units — one per MoE layer** (Qwen3-30B-A3B has
+48 decoder layers). Each unit:
+
+- **holds one layer's 128 experts** — the fused `gate_up` `[128, 2×768, 2048]` and `down`
+  `[128, 2048, 768]` weights in bf16, **≈ 1.23 GB** — in a single fixed-offset HBM arena;
+- runs as its **own OS process under NVIDIA MPS**, compute-isolated to a fixed **6% of its GPU's
+  streaming multiprocessors** (`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=6`);
+- executes its FFN as a **CUDA-Graph-captured** batched GEMM (all 128 experts, fixed shape) +
+  index-driven weighted combine — the same static graph replays for every token.
+
+The 48 units are round-robin'd across the 3 GPUs by layer index, **16 units per GPU**:
+
+| GPU | Fabric units (MoE layer indices) | Units | MPS % each | Σ MPS demand | Expert weights | + A-side (HF) | ≈ mem used |
+|----|----------------------------------|------|-----------|-------------|---------------|--------------|-----------|
+| 0 | 0, 3, 6, …, 45 | 16 | 6% | 96% | ~19.7 GB | ~3 GB | ~23 GB |
+| 1 | 1, 4, 7, …, 46 | 16 | 6% | 96% | ~19.7 GB | — | ~20 GB |
+| 2 | 2, 5, 8, …, 47 | 16 | 6% | 96% | ~19.7 GB | — | ~20 GB |
+| | | **48** | | | **~59 GB** | ~3 GB | |
+
+**Why these numbers.** *48 units* = one FFN stage per layer; a token flows through the layers in
+order, so the layers are the natural stages of the systolic pipeline. *6% SM each* is set so the
+16 units co-resident on a GPU sum to **96%** — a near-full compute partition with no
+oversubscription, while MPS enforces hard isolation between them (an A100 has 108 SMs, so 6% ≈ 6–7
+SMs per unit). The coordinator (HF's A-side on GPU 0) drives all 48 units in lockstep per token:
+it writes the hidden state, bumps an epoch counter in shared memory, and each unit — wherever it
+lives — reads its input over NVLink P2P, replays its captured graph, and writes the result back.
+
+---
+
+## 4. Results (3 runs each, 247 decode tokens per run)
 
 ### Case 1 — Normal
 
@@ -89,7 +120,7 @@ GPU" is a reported finding, not hidden.
 
 ---
 
-## 4. What the numbers say
+## 5. What the numbers say
 
 **Determinism — MS-AFD wins, repeatably.** The p99/p50 ratio is tighter in **all three runs**
 (1.010–1.027 vs. 1.051–1.060). On average the fabric's tail is **~1.9% over median vs. ~5.4%** for
@@ -117,7 +148,7 @@ statically-scheduled fabric is for: workloads where a predictable p99 matters mo
 
 ---
 
-## 5. Verdict
+## 6. Verdict
 
 On the same 30B MoE and the same 3× A100 box, MS-AFD delivers a **measurably and repeatably more
 deterministic** per-token latency (p99/p50 1.019 vs. 1.054; CV 0.0082 vs. 0.0120) while producing
